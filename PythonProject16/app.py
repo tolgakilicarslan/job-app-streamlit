@@ -70,6 +70,13 @@ h1, h2, h3 { color: #1f2937; }
     font-size: 0.9rem;
     color: #555;
     margin-top: 10px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 15px;
+}
+.match-rate {
+    font-weight: bold;
+    color: #10B981;
 }
 </style>
 """, unsafe_allow_html=True)
@@ -85,6 +92,51 @@ def read_pdf(file):
     except Exception as e:
         st.error(f"Error reading PDF file: {e}")
         return None
+
+@st.cache_data
+def fetch_job_details_from_url(_model, url):
+    """Fetches and extracts job title and description from a URL using Gemini."""
+    try:
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.36'}
+        response = requests.get(url, headers=headers, timeout=15)
+        response.raise_for_status()
+        
+        soup = BeautifulSoup(response.text, 'html.parser')
+        page_content = soup.get_text(separator=' ', strip=True)[:25000]
+
+        extract_prompt = f"""
+        Analyze the following text from a webpage and extract the job title and the full job description.
+        Provide the output in this exact format, with no extra text or explanations:
+        
+        Job Title: [The extracted job title]
+        Job Description: [The full, extracted job description]
+
+        Webpage Text:
+        {page_content}
+        """
+        extract_response = _model.generate_content(extract_prompt)
+        text = extract_response.text.strip()
+        
+        lines = text.split('\n')
+        job_title = ""
+        job_description_lines = []
+        
+        if lines and lines[0].startswith("Job Title:"):
+            job_title = lines[0].replace("Job Title:", "").strip()
+        
+        desc_started = False
+        for line in lines[1:]:
+            if line.startswith("Job Description:"):
+                job_description_lines.append(line.replace("Job Description:", "").strip())
+                desc_started = True
+            elif desc_started:
+                job_description_lines.append(line.strip())
+        
+        job_description = '\n'.join(job_description_lines)
+        return job_title, job_description
+    except Exception as e:
+        st.error(f"Error fetching or parsing URL: {e}")
+        return "", ""
 
 def export_to_pdf(content):
     """Exports a string to a PDF file."""
@@ -118,6 +170,18 @@ def run_main_app():
         
         st.header("Job Details")
         st.markdown("---")
+        
+        job_url = st.text_input("Fetch from Job Posting URL (optional)")
+        if st.button("Fetch from URL") and job_url:
+            with st.spinner("Fetching and extracting job details..."):
+                title, desc = fetch_job_details_from_url(model, job_url)
+                if title and desc:
+                    st.session_state.job_title_input = title
+                    st.session_state.job_desc_input = desc
+                    st.success("Job details fetched!")
+                else:
+                    st.error("Could not extract details. Please paste them manually.")
+
         st.text_input("Job Title", key="job_title_input")
         st.text_area("Job Description", key="job_desc_input", height=200)
         
@@ -219,10 +283,10 @@ def run_main_app():
             if search_keywords:
                 with st.spinner("Simulating job search..."):
                     st.session_state.mock_jobs = [
-                        {"title": f"Senior {search_keywords}", "company": "Innovatech Solutions", "location": search_location, "desc": f"We are seeking a seasoned {search_keywords} with over 5 years of experience to lead our core product development. You will be responsible for mentoring junior developers and driving technical architecture.", "logo": "https://placehold.co/100x100/3B82F6/FFFFFF?text=IS"},
-                        {"title": f"{search_keywords}", "company": "Data Systems Co.", "location": search_location, "desc": f"Join our dynamic team as a {search_keywords}. You will work on exciting new projects using cutting-edge technology. A strong understanding of database management is required.", "logo": "https://placehold.co/100x100/1F2937/FFFFFF?text=DS"},
-                        {"title": f"Junior {search_keywords}", "company": "NextGen Startups", "location": search_location, "desc": f"An excellent opportunity for a recent graduate or early-career {search_keywords}. You will learn from senior engineers and contribute to a fast-paced, agile environment.", "logo": "https://placehold.co/100x100/10B981/FFFFFF?text=NS"},
-                        {"title": f"Lead {search_keywords} (Remote)", "company": "Global Tech LLC", "location": "Remote", "desc": f"This is a fully remote role for a Lead {search_keywords}. You will manage a distributed team and oversee the entire software development lifecycle for our flagship product.", "logo": "https://placehold.co/100x100/6B7280/FFFFFF?text=GT"}
+                        {"title": f"Senior {search_keywords}", "company": "Innovatech Solutions", "location": search_location, "desc": f"We are seeking a seasoned {search_keywords} with over 5 years of experience to lead our core product development. You will be responsible for mentoring junior developers and driving technical architecture.", "logo": "https://placehold.co/100x100/3B82F6/FFFFFF?text=IS", "source": "LinkedIn", "link": f"https://www.linkedin.com/jobs/search/?keywords={quote(f'Senior {search_keywords}')}"},
+                        {"title": f"{search_keywords}", "company": "Data Systems Co.", "location": search_location, "desc": f"Join our dynamic team as a {search_keywords}. You will work on exciting new projects using cutting-edge technology. A strong understanding of database management is required.", "logo": "https://placehold.co/100x100/1F2937/FFFFFF?text=DS", "source": "Indeed", "link": f"https://www.indeed.com/jobs?q={quote(search_keywords)}"},
+                        {"title": f"Junior {search_keywords}", "company": "NextGen Startups", "location": search_location, "desc": f"An excellent opportunity for a recent graduate or early-career {search_keywords}. You will learn from senior engineers and contribute to a fast-paced, agile environment.", "logo": "https://placehold.co/100x100/10B981/FFFFFF?text=NS", "source": "Google Careers", "link": f"https://www.google.com/search?q={quote(f'Junior {search_keywords}')}+jobs&ibp=htl;jobs"},
+                        {"title": f"Lead {search_keywords} (Remote)", "company": "Global Tech LLC", "location": "Remote", "desc": f"This is a fully remote role for a Lead {search_keywords}. You will manage a distributed team and oversee the entire software development lifecycle for our flagship product.", "logo": "https://placehold.co/100x100/6B7280/FFFFFF?text=GT", "source": "LinkedIn", "link": f"https://www.linkedin.com/jobs/search/?keywords={quote(f'Lead {search_keywords}')}"}
                     ]
             else:
                 st.error("Please enter search keywords to simulate a search.")
@@ -241,13 +305,17 @@ def run_main_app():
                     st.markdown(f"<div class='company-name'>{job['company']} - {job['location']}</div>", unsafe_allow_html=True)
                     st.markdown("</div></div>", unsafe_allow_html=True)
 
+                    match_rate = random.randint(65, 95)
                     details = [
-                        f"**Type:** Full-Time",
+                        f"<span class='match-rate'>✔ {match_rate}% Match</span>",
+                        f"**Source:** <a href='{job['link']}' target='_blank'>{job['source']}</a>",
                         f"**Posted:** {random.randint(1, 28)} days ago",
                         f"**Applicants:** {random.randint(5, 100)}"
                     ]
                     st.markdown(f"<div class='job-details'>{' | '.join(details)}</div>", unsafe_allow_html=True)
                     
+                    st.markdown(f"<p style='margin-top:10px;'>{job['desc']}</p>", unsafe_allow_html=True)
+
                     if st.button("Prepare for this Job", key=f"prepare_{i}"):
                         st.session_state.job_title_input = job['title']
                         st.session_state.job_desc_input = f"{job['company']}\n\n{job['desc']}"
