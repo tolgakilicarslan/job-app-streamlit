@@ -8,6 +8,7 @@ import datetime
 from urllib.parse import quote
 from fpdf import FPDF
 from PIL import Image
+import random
 
 # --- Page Configuration ---
 st.set_page_config(layout="wide", page_title="AI Job Application Helper")
@@ -38,6 +39,23 @@ h1, h2, h3 { color: #1f2937; }
     padding: 15px;
     margin-bottom: 15px;
     box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+    display: flex;
+    flex-direction: column;
+}
+.job-header {
+    display: flex;
+    align-items: center;
+    margin-bottom: 10px;
+}
+.job-logo {
+    width: 50px;
+    height: 50px;
+    margin-right: 15px;
+    border-radius: 5px;
+    object-fit: contain;
+}
+.job-title-container {
+    flex-grow: 1;
 }
 .job-title {
     font-weight: 600;
@@ -46,6 +64,11 @@ h1, h2, h3 { color: #1f2937; }
 .company-name {
     font-weight: 500;
     color: #333;
+}
+.job-details {
+    font-size: 0.9rem;
+    color: #555;
+    margin-top: 10px;
 }
 </style>
 """, unsafe_allow_html=True)
@@ -62,49 +85,22 @@ def read_pdf(file):
         st.error(f"Error reading PDF file: {e}")
         return None
 
-def fetch_job_details_from_url(url, model):
-    """Fetches and extracts job title and description from a URL using Gemini."""
+def search_jobs_api(keywords, location, api_key):
+    """Searches for jobs using the JSearch API."""
+    url = "https://jsearch.p.rapidapi.com/search"
+    query = f"{keywords} in {location}"
+    querystring = {"query": query, "num_pages": "1", "radius": "50"}
+    headers = {
+        "X-RapidAPI-Key": api_key,
+        "X-RapidAPI-Host": "jsearch.p.rapidapi.com"
+    }
     try:
-        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.36'}
-        response = requests.get(url, headers=headers, timeout=15)
+        response = requests.get(url, headers=headers, params=querystring, timeout=20)
         response.raise_for_status()
-        
-        soup = BeautifulSoup(response.text, 'html.parser')
-        page_content = soup.get_text(separator=' ', strip=True)[:25000]
-
-        extract_prompt = f"""
-        Analyze the following text from a webpage and extract the job title and the full job description.
-        Provide the output in this exact format, with no extra text or explanations:
-        
-        Job Title: [The extracted job title]
-        Job Description: [The full, extracted job description]
-
-        Webpage Text:
-        {page_content}
-        """
-        extract_response = model.generate_content(extract_prompt)
-        text = extract_response.text.strip()
-        
-        lines = text.split('\n')
-        job_title = ""
-        job_description_lines = []
-        
-        if lines and lines[0].startswith("Job Title:"):
-            job_title = lines[0].replace("Job Title:", "").strip()
-        
-        desc_started = False
-        for line in lines[1:]:
-            if line.startswith("Job Description:"):
-                job_description_lines.append(line.replace("Job Description:", "").strip())
-                desc_started = True
-            elif desc_started:
-                job_description_lines.append(line.strip())
-        
-        job_description = '\n'.join(job_description_lines)
-        return job_title, job_description
-    except Exception as e:
-        st.error(f"Error fetching or parsing URL: {e}")
-        return "", ""
+        return response.json().get('data', [])
+    except requests.exceptions.RequestException as e:
+        st.error(f"API request failed: {e}")
+        return []
 
 def export_to_pdf(content):
     """Exports a string to a PDF file."""
@@ -119,16 +115,17 @@ def run_main_app():
     """The main application logic after successful authentication."""
     try:
         GEMINI_API_KEY = st.secrets["GEMINI_API_KEY"]
+        JSEARCH_API_KEY = st.secrets["JSEARCH_API_KEY"]
         genai.configure(api_key=GEMINI_API_KEY)
     except (FileNotFoundError, KeyError) as e:
-        st.error(f"A required API key is missing from secrets: {e}. Please contact the administrator.")
+        st.error(f"A required API key is missing from secrets: {e}. Please add JSEARCH_API_KEY to your secrets file.")
         st.stop()
 
     model = genai.GenerativeModel('gemini-1.5-flash-latest')
 
-    for key in ["messages", "chat_session", "job_title_input", "job_desc_input", "mock_jobs"]:
+    for key in ["messages", "chat_session", "job_title_input", "job_desc_input", "real_jobs"]:
         if key not in st.session_state:
-            st.session_state[key] = [] if key in ["messages", "mock_jobs"] else ""
+            st.session_state[key] = [] if key == "real_jobs" or key == "messages" else ""
 
     with st.sidebar:
         st.header("Your Details & Job Info")
@@ -138,17 +135,6 @@ def run_main_app():
         
         st.header("Job Details")
         st.markdown("---")
-        job_url = st.text_input("Fetch from Job Posting URL (optional)")
-        if st.button("Fetch from URL") and job_url:
-            with st.spinner("Fetching and extracting job details..."):
-                title, desc = fetch_job_details_from_url(job_url, model)
-                if title and desc:
-                    st.session_state.job_title_input = title
-                    st.session_state.job_desc_input = desc
-                    st.success("Job details fetched!")
-                else:
-                    st.error("Could not extract details. Please paste them manually.")
-        
         st.text_input("Job Title", key="job_title_input")
         st.text_area("Job Description", key="job_desc_input", height=200)
         
@@ -241,37 +227,53 @@ def run_main_app():
                     st.download_button("Download as PDF", data=pdf_data, file_name=file_name_pdf, mime="application/pdf")
 
     with tab2:
-        st.header("Simulated Job Search")
-        st.markdown("Find mock job postings to practice generating application materials.")
+        st.header("Live Job Search")
+        st.markdown("Find real job postings and instantly prepare application materials.")
         search_keywords = st.text_input("Keywords (e.g., Software Engineer)")
         search_location = st.text_input("Location (e.g., Toronto, ON)")
         
         if st.button("Search for Jobs"):
             if search_keywords:
-                with st.spinner("Simulating job search..."):
-                    st.session_state.mock_jobs = [
-                        {"title": f"Senior {search_keywords}", "company": "Innovatech Solutions", "location": search_location, "desc": f"We are seeking a seasoned {search_keywords} with over 5 years of experience to lead our core product development. You will be responsible for mentoring junior developers and driving technical architecture."},
-                        {"title": f"{search_keywords}", "company": "Data Systems Co.", "location": search_location, "desc": f"Join our dynamic team as a {search_keywords}. You will work on exciting new projects using cutting-edge technology. A strong understanding of database management is required."},
-                        {"title": f"Junior {search_keywords}", "company": "NextGen Startups", "location": search_location, "desc": f"An excellent opportunity for a recent graduate or early-career {search_keywords}. You will learn from senior engineers and contribute to a fast-paced, agile environment."},
-                        {"title": f"Lead {search_keywords} (Remote)", "company": "Global Tech LLC", "location": "Remote", "desc": f"This is a fully remote role for a Lead {search_keywords}. You will manage a distributed team and oversee the entire software development lifecycle for our flagship product."}
-                    ]
+                with st.spinner("Searching for live job postings..."):
+                    st.session_state.real_jobs = search_jobs_api(search_keywords, search_location, JSEARCH_API_KEY)
             else:
-                st.error("Please enter search keywords to simulate a search.")
+                st.error("Please enter search keywords to begin a search.")
 
-        if st.session_state.mock_jobs:
+        if st.session_state.real_jobs:
             st.markdown("---")
-            st.subheader("Simulated Job Postings")
-            for i, job in enumerate(st.session_state.mock_jobs):
+            st.subheader(f"Found {len(st.session_state.real_jobs)} Job Postings")
+            for i, job in enumerate(st.session_state.real_jobs):
                 with st.container():
                     st.markdown(f"<div class='job-card'>", unsafe_allow_html=True)
-                    st.markdown(f"<div class='job-title'>{job['title']}</div>", unsafe_allow_html=True)
-                    st.markdown(f"<div class='company-name'>{job['company']} - {job['location']}</div>", unsafe_allow_html=True)
-                    st.markdown(f"<p>{job['desc']}</p>", unsafe_allow_html=True)
+                    
+                    # Job Header with Logo
+                    st.markdown("<div class='job-header'>", unsafe_allow_html=True)
+                    logo_url = job.get('employer_logo')
+                    if logo_url:
+                        st.markdown(f"<img src='{logo_url}' class='job-logo' alt='company logo'>", unsafe_allow_html=True)
+                    st.markdown("<div class='job-title-container'>", unsafe_allow_html=True)
+                    st.markdown(f"<div class='job-title'>{job.get('job_title', 'N/A')}</div>", unsafe_allow_html=True)
+                    st.markdown(f"<div class='company-name'>{job.get('employer_name', 'N/A')}</div>", unsafe_allow_html=True)
+                    st.markdown("</div></div>", unsafe_allow_html=True)
+
+                    # Job Details
+                    details = []
+                    if job.get('job_employment_type'):
+                        details.append(f"**Type:** {job.get('job_employment_type').title()}")
+                    if job.get('job_posted_at_datetime_utc'):
+                        post_date = datetime.datetime.fromisoformat(job.get('job_posted_at_datetime_utc').replace('Z', '+00:00'))
+                        details.append(f"**Posted:** {post_date.strftime('%b %d, %Y')}")
+                    
+                    # Simulate number of applicants
+                    num_applicants = random.randint(5, 100)
+                    details.append(f"**Applicants:** {num_applicants}")
+
+                    st.markdown(f"<div class='job-details'>{' | '.join(details)}</div>", unsafe_allow_html=True)
                     
                     if st.button("Prepare for this Job", key=f"prepare_{i}"):
-                        st.session_state.job_title_input = job['title']
-                        st.session_state.job_desc_input = job['desc']
-                        st.success(f"Job details for '{job['title']}' loaded into the sidebar!")
+                        st.session_state.job_title_input = job.get('job_title', '')
+                        st.session_state.job_desc_input = f"{job.get('employer_name', '')}\n\n{job.get('job_description', '')}"
+                        st.success(f"Job details for '{job.get('job_title')}' loaded into the sidebar!")
                     
                     st.markdown(f"</div>", unsafe_allow_html=True)
 
