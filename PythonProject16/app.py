@@ -183,7 +183,8 @@ def run_main_app():
 
     model = genai.GenerativeModel('gemini-1.5-flash-latest')
 
-    for key in ["messages", "chat_session", "job_title_input", "job_desc_input", "live_jobs", "current_page", "resume_text", "search_params"]:
+    # Initialize session state variables
+    for key in ["messages", "chat_session", "job_title", "job_description", "live_jobs", "current_page", "resume_text", "search_params"]:
         if key not in st.session_state:
             st.session_state[key] = [] if key in ["messages", "live_jobs"] else 1 if key == "current_page" else {} if key == "search_params" else ""
 
@@ -212,14 +213,16 @@ def run_main_app():
             with st.spinner("Fetching and extracting job details..."):
                 title, desc = fetch_job_details_from_url(model, job_url)
                 if title and desc:
-                    st.session_state.job_title_input = title
-                    st.session_state.job_desc_input = desc
+                    st.session_state.job_title = title
+                    st.session_state.job_description = desc
                     st.success("Job details fetched!")
+                    st.rerun() # Rerun to update the widgets below
                 else:
                     st.error("Could not extract details. Please paste them manually.")
 
-        st.text_input("Job Title", key="job_title_input")
-        st.text_area("Job Description", key="job_desc_input", height=200)
+        # FIX: Use value from session_state and update it on change
+        st.session_state.job_title = st.text_input("Job Title", value=st.session_state.job_title)
+        st.session_state.job_description = st.text_area("Job Description", value=st.session_state.job_description, height=200)
         
         st.header("Action")
         st.markdown("---")
@@ -230,17 +233,17 @@ def run_main_app():
         )
 
         if st.button("✨ Generate Initial Draft", use_container_width=True, type="primary"):
-            if st.session_state.resume_text and st.session_state.job_title_input and st.session_state.job_desc_input:
+            if st.session_state.resume_text and st.session_state.job_title and st.session_state.job_description:
                 st.session_state.chat_session = model.start_chat(history=[])
                 st.session_state.messages = []
                 
-                company_name = st.session_state.job_desc_input.splitlines()[0] if st.session_state.job_desc_input.splitlines() else st.session_state.job_title_input
+                company_name = st.session_state.job_description.splitlines()[0] if st.session_state.job_description.splitlines() else st.session_state.job_title
                 
                 prompts = {
-                    "Generate Cover Letter": f"First, analyze the provided resume text and extract the following details: Full Name, Full Address, Phone Number, and Email. If a LinkedIn URL is present, extract it as well. Second, using the extracted details, write a complete and professional cover letter for the job of '{st.session_state.job_title_input}'. The cover letter MUST start with a professional header formatted exactly like this, using the extracted information:\n[Your Name]\n[Your Address]\n[Your Phone Number] | [Your Email] | [Your LinkedIn Profile URL (if found)]\n\n{datetime.date.today().strftime('%B %d, %Y')}\n\nHiring Manager\n{company_name}\n\nDear Hiring Manager,\n[Continue with the body of the cover letter, tailored to the job description and resume.]\n\n**My Resume:**\n{st.session_state.resume_text}\n\n**Job Description:**\n{st.session_state.job_desc_input}",
-                    "Tailor Resume for Job": f"Act as a professional resume editor. Your task is to tailor the following resume to better match the given job description. Output the complete, updated resume text in Markdown format.\n\n**My Original Resume:**\n{st.session_state.resume_text}\n\n**Job Title:**\n{st.session_state.job_title_input}\n\n**Job Description:**\n{st.session_state.job_desc_input}",
-                    "Prepare for Interview": f"Act as an experienced hiring manager. Generate 10 common and insightful interview questions for the '{st.session_state.job_title_input}' role, based on the provided job description and my resume. For each question, provide a sample answer.\n\n**My Resume:**\n{st.session_state.resume_text}\n\n**Job Description:**\n{st.session_state.job_desc_input}",
-                    "Skill Gap Analysis": f"Act as a career advisor. Analyze my resume against the job description. Identify key skills I am missing and list them. Then, suggest specific online courses, certifications, or projects I could undertake to fill these gaps.\n\n**My Resume:**\n{st.session_state.resume_text}\n\n**Job Title:**\n{st.session_state.job_title_input}\n\n**Job Description:**\n{st.session_state.job_desc_input}"
+                    "Generate Cover Letter": f"First, analyze the provided resume text and extract the following details: Full Name, Full Address, Phone Number, and Email. If a LinkedIn URL is present, extract it as well. Second, using the extracted details, write a complete and professional cover letter for the job of '{st.session_state.job_title}'. The cover letter MUST start with a professional header formatted exactly like this, using the extracted information:\n[Your Name]\n[Your Address]\n[Your Phone Number] | [Your Email] | [Your LinkedIn Profile URL (if found)]\n\n{datetime.date.today().strftime('%B %d, %Y')}\n\nHiring Manager\n{company_name}\n\nDear Hiring Manager,\n[Continue with the body of the cover letter, tailored to the job description and resume.]\n\n**My Resume:**\n{st.session_state.resume_text}\n\n**Job Description:**\n{st.session_state.job_description}",
+                    "Tailor Resume for Job": f"Act as a professional resume editor. Your task is to tailor the following resume to better match the given job description. Output the complete, updated resume text in Markdown format.\n\n**My Original Resume:**\n{st.session_state.resume_text}\n\n**Job Title:**\n{st.session_state.job_title}\n\n**Job Description:**\n{st.session_state.job_description}",
+                    "Prepare for Interview": f"Act as an experienced hiring manager. Generate 10 common and insightful interview questions for the '{st.session_state.job_title}' role, based on the provided job description and my resume. For each question, provide a sample answer.\n\n**My Resume:**\n{st.session_state.resume_text}\n\n**Job Description:**\n{st.session_state.job_description}",
+                    "Skill Gap Analysis": f"Act as a career advisor. Analyze my resume against the job description. Identify key skills I am missing and list them. Then, suggest specific online courses, certifications, or projects I could undertake to fill these gaps.\n\n**My Resume:**\n{st.session_state.resume_text}\n\n**Job Title:**\n{st.session_state.job_title}\n\n**Job Description:**\n{st.session_state.job_description}"
                 }
                 prompt = prompts[action]
 
@@ -324,9 +327,11 @@ def run_main_app():
                     "exclude": exclude_keywords,
                     "remote": remote_only
                 }
+                st.session_state.live_jobs = [] # Clear previous results
 
         if st.session_state.search_params.get("keywords"):
-            with st.spinner("Searching for live job postings..."):
+            # This block runs if a search has been initiated
+            with st.spinner(f"Searching for jobs on page {st.session_state.current_page}..."):
                 params = st.session_state.search_params
                 all_results = search_jobs_api(params["keywords"], params["location"], JSEARCH_API_KEY, st.session_state.current_page, params["skills"], params["remote"])
                 
@@ -388,10 +393,12 @@ def run_main_app():
                     with st.expander("View Job Description"):
                         st.markdown(job.get('job_description', 'No description available.'))
 
+                    # FIX: The button now updates session state and reruns the app
                     if st.button("Prepare for this Job", key=f"prepare_{i}"):
-                        st.session_state.job_title_input = job.get('job_title', '')
-                        st.session_state.job_desc_input = f"{job.get('employer_name', '')}\n\n{job.get('job_description', '')}"
+                        st.session_state.job_title = job.get('job_title', '')
+                        st.session_state.job_description = f"{job.get('employer_name', '')}\n\n{job.get('job_description', '')}"
                         st.success(f"Job details for '{job.get('job_title')}' loaded into the sidebar!")
+                        st.rerun()
                     
                     st.markdown(f"</div>", unsafe_allow_html=True)
 
@@ -401,6 +408,7 @@ def run_main_app():
                 if st.session_state.current_page > 1:
                     if st.button("⬅️ Previous Page"):
                         st.session_state.current_page -= 1
+                        st.session_state.live_jobs = [] # Clear old results before fetching new
                         st.rerun()
             with col2:
                 st.write(f"Page {st.session_state.current_page}")
@@ -408,6 +416,7 @@ def run_main_app():
                 if len(st.session_state.live_jobs) > 0:
                     if st.button("Next Page ➡️"):
                         st.session_state.current_page += 1
+                        st.session_state.live_jobs = [] # Clear old results before fetching new
                         st.rerun()
 
 def check_password():
