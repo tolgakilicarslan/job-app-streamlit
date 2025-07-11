@@ -4,6 +4,8 @@ import PyPDF2
 import io
 import requests
 from bs4 import BeautifulSoup
+import datetime
+from urllib.parse import quote
 
 # --- Page Configuration ---
 st.set_page_config(layout="wide", page_title="AI Job Application Helper")
@@ -30,8 +32,13 @@ html, body, [class*="st-"] {
     font-size: 1.1rem;
 }
 .company-name {
-    font-style: italic;
+    font-weight: 500;
+    color: #333;
+}
+.job-details {
+    font-size: 0.9rem;
     color: #555;
+    margin-top: 10px;
 }
 </style>
 """, unsafe_allow_html=True)
@@ -47,67 +54,41 @@ def read_pdf(file):
         st.error(f"Error reading PDF file: {e}")
         return None
 
-def fetch_job_details_from_url(url, model):
-    """Fetches and extracts job title and description from a URL using Gemini."""
+def search_jobs_api(keywords, location, api_key):
+    """Searches for jobs using the JSearch API."""
+    url = "https://jsearch.p.rapidapi.com/search"
+    query = f"{keywords} in {location}"
+    querystring = {"query": query, "num_pages": "1", "radius": "50"}
+    headers = {
+        "X-RapidAPI-Key": api_key,
+        "X-RapidAPI-Host": "jsearch.p.rapidapi.com"
+    }
     try:
-        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.36'}
-        response = requests.get(url, headers=headers, timeout=15)
+        response = requests.get(url, headers=headers, params=querystring, timeout=20)
         response.raise_for_status()
-        
-        soup = BeautifulSoup(response.text, 'html.parser')
-        page_content = soup.get_text(separator=' ', strip=True)[:25000]
-
-        extract_prompt = f"""
-        Analyze the following text from a webpage and extract the job title and the full job description.
-        Provide the output in this exact format, with no extra text or explanations:
-        
-        Job Title: [The extracted job title]
-        Job Description: [The full, extracted job description]
-
-        Webpage Text:
-        {page_content}
-        """
-        extract_response = model.generate_content(extract_prompt)
-        text = extract_response.text.strip()
-        
-        lines = text.split('\n')
-        job_title = ""
-        job_description_lines = []
-        
-        if lines and lines[0].startswith("Job Title:"):
-            job_title = lines[0].replace("Job Title:", "").strip()
-        
-        desc_started = False
-        for line in lines[1:]:
-            if line.startswith("Job Description:"):
-                job_description_lines.append(line.replace("Job Description:", "").strip())
-                desc_started = True
-            elif desc_started:
-                job_description_lines.append(line.strip())
-        
-        job_description = '\n'.join(job_description_lines)
-        return job_title, job_description
-    except Exception as e:
-        st.error(f"Error fetching or parsing URL: {e}")
-        return "", ""
+        return response.json().get('data', [])
+    except requests.exceptions.RequestException as e:
+        st.error(f"API request failed: {e}")
+        return []
 
 def run_main_app():
     """The main application logic after successful authentication."""
-    # --- Gemini API Configuration ---
+    # --- API Key Configuration ---
     try:
         GEMINI_API_KEY = st.secrets["GEMINI_API_KEY"]
+        JSEARCH_API_KEY = st.secrets["JSEARCH_API_KEY"]
         genai.configure(api_key=GEMINI_API_KEY)
-    except (FileNotFoundError, KeyError):
-        st.warning("GEMINI_API_KEY not found in st.secrets. Please add it to your .streamlit/secrets.toml file.")
+    except (FileNotFoundError, KeyError) as e:
+        st.error(f"A required API key is missing from secrets: {e}. Please contact the administrator.")
         st.stop()
 
     # --- Model Selection ---
     model = genai.GenerativeModel('gemini-1.5-flash-latest')
 
     # --- Initialize Session State ---
-    for key in ["messages", "chat_session", "fetched_job_title", "fetched_job_description", "mock_jobs", "active_tab"]:
+    for key in ["messages", "chat_session", "fetched_job_title", "fetched_job_description", "real_jobs", "active_tab"]:
         if key not in st.session_state:
-            st.session_state[key] = [] if key in ["messages", "mock_jobs"] else ""
+            st.session_state[key] = [] if key in ["messages", "real_jobs"] else ""
 
     # --- Sidebar for Inputs ---
     with st.sidebar:
@@ -115,18 +96,7 @@ def run_main_app():
         resume_file = st.file_uploader("1. Upload Resume (TXT or PDF)", type=["txt", "pdf"])
         
         st.header("Job Details")
-        st.markdown("Enter details manually or fetch from a URL.")
-        
-        job_url = st.text_input("Job Posting URL (optional)")
-        if st.button("Fetch from URL") and job_url:
-            with st.spinner("Fetching and extracting job details..."):
-                title, desc = fetch_job_details_from_url(job_url, model)
-                if title and desc:
-                    st.session_state.fetched_job_title = title
-                    st.session_state.fetched_job_description = desc
-                    st.success("Job details fetched!")
-                else:
-                    st.error("Could not extract details. Please paste them manually.")
+        st.markdown("Enter details manually, or select a job from the 'Find a Job' tab.")
         
         job_title = st.text_input("Job Title", key="job_title_input", value=st.session_state.fetched_job_title)
         job_description = st.text_area("Job Description", key="job_desc_input", height=200, value=st.session_state.fetched_job_description)
@@ -147,8 +117,34 @@ def run_main_app():
                     st.session_state.chat_session = model.start_chat(history=[])
                     st.session_state.messages = []
                     
+                    # Enhanced prompts
+                    company_name = job_description.splitlines()[0] if job_description.splitlines() else job_title
+                    
                     prompts = {
-                        "Generate Cover Letter": f"Act as a professional career coach... write a compelling cover letter...\n\n**My Resume:**\n{resume_text}\n\n**Job Title:**\n{job_title}\n\n**Job Description:**\n{job_description}",
+                        "Generate Cover Letter": f"""
+                        First, analyze the provided resume text and extract the following details: Full Name, Full Address, Phone Number, and Email.
+                        If a LinkedIn URL is present, extract it as well.
+
+                        Second, using the extracted details, write a complete and professional cover letter for the job of '{job_title}'.
+                        The cover letter MUST start with a professional header formatted exactly like this, using the extracted information:
+                        [Your Name]
+                        [Your Address]
+                        [Your Phone Number] | [Your Email] | [Your LinkedIn Profile URL (if found)]
+
+                        {datetime.date.today().strftime('%B %d, %Y')}
+
+                        Hiring Manager
+                        {company_name}
+
+                        Dear Hiring Manager,
+                        [Continue with the body of the cover letter, tailored to the job description and resume.]
+
+                        **My Resume:**
+                        {resume_text}
+
+                        **Job Description:**
+                        {job_description}
+                        """,
                         "Tailor Resume for Job": f"Act as a professional resume editor... tailor the following resume...\n\n**My Original Resume:**\n{resume_text}\n\n**Job Title:**\n{job_title}\n\n**Job Description:**\n{job_description}",
                         "Prepare for Interview": f"Act as an experienced hiring manager... Generate 10 interview questions...\n\n**My Resume:**\n{resume_text}\n\n**Job Description:**\n{job_description}"
                     }
@@ -171,6 +167,7 @@ def run_main_app():
     tab1, tab2 = st.tabs(["📄 AI Document Generator", "🔍 Find a Job"])
 
     with tab1:
+        # ... (Chat interface code remains the same) ...
         st.header("Refine Your Document")
         if not st.session_state.chat_session:
             st.info("Please fill out the details in the sidebar and click 'Generate Initial Draft' to begin.")
@@ -207,41 +204,42 @@ def run_main_app():
                     st.download_button("Download Latest Response", data=last_content, file_name=file_name)
 
     with tab2:
-        st.header("Simulated Job Search")
+        st.header("Live Job Search")
         search_keywords = st.text_input("Keywords (e.g., Python Developer)")
-        search_location = st.text_input("Location (e.g., San Francisco, CA)")
+        search_location = st.text_input("Location (e.g., Toronto, ON)")
         if st.button("Search for Jobs"):
             if search_keywords:
-                with st.spinner("Simulating job search..."):
-                    # In a real app, this would be an API call. Here we simulate it.
-                    st.session_state.mock_jobs = [
-                        {"title": f"Senior {search_keywords}", "company": "TechCorp Inc.", "desc": f"Seeking an experienced {search_keywords} to lead our new project. Must have 5+ years of experience and a passion for innovation.", "location": search_location},
-                        {"title": f"Junior {search_keywords}", "company": "Innovate Solutions", "desc": f"Entry-level position for a {search_keywords}. Great opportunity for growth and learning. Bachelor's degree required.", "location": search_location},
-                        {"title": f"{search_keywords} (Contract)", "company": "Creative Agency", "desc": f"6-month contract for a {search_keywords} to help us build a new client platform. Remote work options available.", "location": search_location},
-                        {"title": f"Lead {search_keywords}", "company": "DataDriven Co.", "desc": f"Manage a team of developers and drive the technical strategy for our core products. Experience with cloud platforms is a plus.", "location": search_location}
-                    ]
+                with st.spinner("Searching for live job postings..."):
+                    st.session_state.real_jobs = search_jobs_api(search_keywords, search_location, JSEARCH_API_KEY)
             else:
                 st.error("Please enter search keywords.")
 
-        if st.session_state.mock_jobs:
+        if st.session_state.real_jobs:
             st.markdown("---")
-            st.subheader("Search Results")
-            for i, job in enumerate(st.session_state.mock_jobs):
+            st.subheader(f"Found {len(st.session_state.real_jobs)} Job Postings")
+            for i, job in enumerate(st.session_state.real_jobs):
                 with st.container():
                     st.markdown(f"<div class='job-card'>", unsafe_allow_html=True)
-                    st.markdown(f"<div class='job-title'>{job['title']}</div>", unsafe_allow_html=True)
-                    st.markdown(f"<div class='company-name'>{job['company']} - {job['location']}</div>", unsafe_allow_html=True)
-                    st.markdown(f"<p>{job['desc']}</p>", unsafe_allow_html=True)
+                    st.markdown(f"<div class='job-title'>{job.get('job_title', 'N/A')}</div>", unsafe_allow_html=True)
+                    st.markdown(f"<div class='company-name'>{job.get('employer_name', 'N/A')}</div>", unsafe_allow_html=True)
+                    
+                    details = []
+                    if job.get('employer_website'):
+                        details.append(f"[Company Website]({job.get('employer_website')})")
+                    if job.get('job_employment_type'):
+                        details.append(f"Type: {job.get('job_employment_type').title()}")
+                    if job.get('job_posted_at_datetime_utc'):
+                        post_date = datetime.datetime.fromisoformat(job.get('job_posted_at_datetime_utc').replace('Z', '+00:00'))
+                        details.append(f"Posted: {post_date.strftime('%Y-%m-%d')}")
+                    
+                    st.markdown(f"<div class='job-details'>{' | '.join(details)}</div>", unsafe_allow_html=True)
                     
                     if st.button("Prepare for this Job", key=f"prepare_{i}"):
-                        st.session_state.fetched_job_title = job['title']
-                        st.session_state.fetched_job_description = job['desc']
-                        st.success(f"Job details for '{job['title']}' loaded into the sidebar. Generate a document now!")
-                        # We don't rerun, to allow the success message to be seen. 
-                        # The values are already in the sidebar widgets.
-                    
+                        st.session_state.fetched_job_title = job.get('job_title', '')
+                        st.session_state.fetched_job_description = f"{job.get('employer_name', '')}\n\n{job.get('job_description', '')}"
+                        st.success(f"Job details for '{job.get('job_title')}' loaded! Go to the sidebar to generate a document.")
+                        
                     st.markdown(f"</div>", unsafe_allow_html=True)
-
 
 # --- Password Protection ---
 def check_password():
