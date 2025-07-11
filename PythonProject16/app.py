@@ -32,6 +32,21 @@ h1, h2, h3 { color: #1f2937; }
 .stButton > button:hover {
     background-color: #2563eb;
 }
+.job-card {
+    border: 1px solid #e0e0e0;
+    border-radius: 10px;
+    padding: 15px;
+    margin-bottom: 15px;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+}
+.job-title {
+    font-weight: 600;
+    font-size: 1.1rem;
+}
+.company-name {
+    font-weight: 500;
+    color: #333;
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -47,19 +62,61 @@ def read_pdf(file):
         st.error(f"Error reading PDF file: {e}")
         return None
 
+def fetch_job_details_from_url(url, model):
+    """Fetches and extracts job title and description from a URL using Gemini."""
+    try:
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.36'}
+        response = requests.get(url, headers=headers, timeout=15)
+        response.raise_for_status()
+        
+        soup = BeautifulSoup(response.text, 'html.parser')
+        page_content = soup.get_text(separator=' ', strip=True)[:25000]
+
+        extract_prompt = f"""
+        Analyze the following text from a webpage and extract the job title and the full job description.
+        Provide the output in this exact format, with no extra text or explanations:
+        
+        Job Title: [The extracted job title]
+        Job Description: [The full, extracted job description]
+
+        Webpage Text:
+        {page_content}
+        """
+        extract_response = model.generate_content(extract_prompt)
+        text = extract_response.text.strip()
+        
+        lines = text.split('\n')
+        job_title = ""
+        job_description_lines = []
+        
+        if lines and lines[0].startswith("Job Title:"):
+            job_title = lines[0].replace("Job Title:", "").strip()
+        
+        desc_started = False
+        for line in lines[1:]:
+            if line.startswith("Job Description:"):
+                job_description_lines.append(line.replace("Job Description:", "").strip())
+                desc_started = True
+            elif desc_started:
+                job_description_lines.append(line.strip())
+        
+        job_description = '\n'.join(job_description_lines)
+        return job_title, job_description
+    except Exception as e:
+        st.error(f"Error fetching or parsing URL: {e}")
+        return "", ""
+
 def export_to_pdf(content):
     """Exports a string to a PDF file."""
     pdf = FPDF()
     pdf.add_page()
     pdf.set_font("Arial", size=12)
-    # Replace non-latin characters that FPDF doesn't support
     content = content.encode('latin-1', 'replace').decode('latin-1')
     pdf.multi_cell(0, 10, content)
     return pdf.output(dest="S").encode("latin-1")
 
 def run_main_app():
     """The main application logic after successful authentication."""
-    # --- API Key Configuration ---
     try:
         GEMINI_API_KEY = st.secrets["GEMINI_API_KEY"]
         genai.configure(api_key=GEMINI_API_KEY)
@@ -67,15 +124,12 @@ def run_main_app():
         st.error(f"A required API key is missing from secrets: {e}. Please contact the administrator.")
         st.stop()
 
-    # --- Model Selection ---
     model = genai.GenerativeModel('gemini-1.5-flash-latest')
 
-    # --- Initialize Session State ---
-    for key in ["messages", "chat_session", "fetched_job_title", "fetched_job_description"]:
+    for key in ["messages", "chat_session", "job_title_input", "job_desc_input", "mock_jobs"]:
         if key not in st.session_state:
-            st.session_state[key] = [] if key == "messages" else ""
+            st.session_state[key] = [] if key in ["messages", "mock_jobs"] else ""
 
-    # --- Sidebar for Inputs ---
     with st.sidebar:
         st.header("Your Details & Job Info")
         st.markdown("---")
@@ -84,8 +138,19 @@ def run_main_app():
         
         st.header("Job Details")
         st.markdown("---")
-        job_title = st.text_input("Job Title", key="job_title_input")
-        job_description = st.text_area("Job Description", key="job_desc_input", height=200)
+        job_url = st.text_input("Fetch from Job Posting URL (optional)")
+        if st.button("Fetch from URL") and job_url:
+            with st.spinner("Fetching and extracting job details..."):
+                title, desc = fetch_job_details_from_url(job_url, model)
+                if title and desc:
+                    st.session_state.job_title_input = title
+                    st.session_state.job_desc_input = desc
+                    st.success("Job details fetched!")
+                else:
+                    st.error("Could not extract details. Please paste them manually.")
+        
+        st.text_input("Job Title", key="job_title_input")
+        st.text_area("Job Description", key="job_desc_input", height=200)
         
         st.header("Action")
         st.markdown("---")
@@ -96,7 +161,7 @@ def run_main_app():
         )
 
         if st.button("✨ Generate Initial Draft", use_container_width=True, type="primary"):
-            if (resume_file or resume_image) and job_title and job_description:
+            if (resume_file or resume_image) and st.session_state.job_title_input and st.session_state.job_desc_input:
                 resume_text = ""
                 with st.spinner("Reading resume..."):
                     if resume_image:
@@ -110,13 +175,13 @@ def run_main_app():
                     st.session_state.chat_session = model.start_chat(history=[])
                     st.session_state.messages = []
                     
-                    company_name = job_description.splitlines()[0] if job_description.splitlines() else job_title
+                    company_name = st.session_state.job_desc_input.splitlines()[0] if st.session_state.job_desc_input.splitlines() else st.session_state.job_title_input
                     
                     prompts = {
-                        "Generate Cover Letter": f"First, analyze the provided resume text and extract the following details: Full Name, Full Address, Phone Number, and Email. If a LinkedIn URL is present, extract it as well. Second, using the extracted details, write a complete and professional cover letter for the job of '{job_title}'. The cover letter MUST start with a professional header formatted exactly like this, using the extracted information:\n[Your Name]\n[Your Address]\n[Your Phone Number] | [Your Email] | [Your LinkedIn Profile URL (if found)]\n\n{datetime.date.today().strftime('%B %d, %Y')}\n\nHiring Manager\n{company_name}\n\nDear Hiring Manager,\n[Continue with the body of the cover letter, tailored to the job description and resume.]\n\n**My Resume:**\n{resume_text}\n\n**Job Description:**\n{job_description}",
-                        "Tailor Resume for Job": f"Act as a professional resume editor. Your task is to tailor the following resume to better match the given job description. Output the complete, updated resume text in Markdown format.\n\n**My Original Resume:**\n{resume_text}\n\n**Job Title:**\n{job_title}\n\n**Job Description:**\n{job_description}",
-                        "Prepare for Interview": f"Act as an experienced hiring manager. Generate 10 common and insightful interview questions for the '{job_title}' role, based on the provided job description and my resume. For each question, provide a sample answer.\n\n**My Resume:**\n{resume_text}\n\n**Job Description:**\n{job_description}",
-                        "Skill Gap Analysis": f"Act as a career advisor. Analyze my resume against the job description. Identify key skills I am missing and list them. Then, suggest specific online courses, certifications, or projects I could undertake to fill these gaps.\n\n**My Resume:**\n{resume_text}\n\n**Job Title:**\n{job_title}\n\n**Job Description:**\n{job_description}"
+                        "Generate Cover Letter": f"First, analyze the provided resume text and extract the following details: Full Name, Full Address, Phone Number, and Email. If a LinkedIn URL is present, extract it as well. Second, using the extracted details, write a complete and professional cover letter for the job of '{st.session_state.job_title_input}'. The cover letter MUST start with a professional header formatted exactly like this, using the extracted information:\n[Your Name]\n[Your Address]\n[Your Phone Number] | [Your Email] | [Your LinkedIn Profile URL (if found)]\n\n{datetime.date.today().strftime('%B %d, %Y')}\n\nHiring Manager\n{company_name}\n\nDear Hiring Manager,\n[Continue with the body of the cover letter, tailored to the job description and resume.]\n\n**My Resume:**\n{resume_text}\n\n**Job Description:**\n{st.session_state.job_desc_input}",
+                        "Tailor Resume for Job": f"Act as a professional resume editor. Your task is to tailor the following resume to better match the given job description. Output the complete, updated resume text in Markdown format.\n\n**My Original Resume:**\n{resume_text}\n\n**Job Title:**\n{st.session_state.job_title_input}\n\n**Job Description:**\n{st.session_state.job_desc_input}",
+                        "Prepare for Interview": f"Act as an experienced hiring manager. Generate 10 common and insightful interview questions for the '{st.session_state.job_title_input}' role, based on the provided job description and my resume. For each question, provide a sample answer.\n\n**My Resume:**\n{resume_text}\n\n**Job Description:**\n{st.session_state.job_desc_input}",
+                        "Skill Gap Analysis": f"Act as a career advisor. Analyze my resume against the job description. Identify key skills I am missing and list them. Then, suggest specific online courses, certifications, or projects I could undertake to fill these gaps.\n\n**My Resume:**\n{resume_text}\n\n**Job Title:**\n{st.session_state.job_title_input}\n\n**Job Description:**\n{st.session_state.job_desc_input}"
                     }
                     prompt = prompts[action]
 
@@ -130,7 +195,6 @@ def run_main_app():
             else:
                 st.error("Please provide a resume, job title, and description.")
 
-    # --- Main App Interface with Tabs ---
     st.title("AI Job Application Helper")
     
     tab1, tab2 = st.tabs(["📄 AI Document Generator", "🔍 Find a Job"])
@@ -177,24 +241,40 @@ def run_main_app():
                     st.download_button("Download as PDF", data=pdf_data, file_name=file_name_pdf, mime="application/pdf")
 
     with tab2:
-        st.header("Find Job Postings Online")
-        st.markdown("Enter your desired job title and location to generate direct search links to popular job boards.")
-        search_keywords = st.text_input("Keywords (e.g., Python Developer)")
+        st.header("Simulated Job Search")
+        st.markdown("Find mock job postings to practice generating application materials.")
+        search_keywords = st.text_input("Keywords (e.g., Software Engineer)")
         search_location = st.text_input("Location (e.g., Toronto, ON)")
         
-        if st.button("Generate Job Search Links"):
+        if st.button("Search for Jobs"):
             if search_keywords:
-                st.markdown("---")
-                st.subheader("Your Custom Job Search Links")
-                encoded_keywords = quote(search_keywords)
-                encoded_location = quote(search_location)
-                st.markdown(f"### [Search on Indeed](https://www.indeed.com/jobs?q={encoded_keywords}&l={encoded_location})")
-                st.markdown(f"### [Search on LinkedIn](https://www.linkedin.com/jobs/search/?keywords={encoded_keywords}&location={encoded_location})")
-                st.markdown(f"### [Search on Google Jobs](https://www.google.com/search?q={encoded_keywords}+jobs+in+{encoded_location}&ibp=htl;jobs)")
+                with st.spinner("Simulating job search..."):
+                    st.session_state.mock_jobs = [
+                        {"title": f"Senior {search_keywords}", "company": "Innovatech Solutions", "location": search_location, "desc": f"We are seeking a seasoned {search_keywords} with over 5 years of experience to lead our core product development. You will be responsible for mentoring junior developers and driving technical architecture."},
+                        {"title": f"{search_keywords}", "company": "Data Systems Co.", "location": search_location, "desc": f"Join our dynamic team as a {search_keywords}. You will work on exciting new projects using cutting-edge technology. A strong understanding of database management is required."},
+                        {"title": f"Junior {search_keywords}", "company": "NextGen Startups", "location": search_location, "desc": f"An excellent opportunity for a recent graduate or early-career {search_keywords}. You will learn from senior engineers and contribute to a fast-paced, agile environment."},
+                        {"title": f"Lead {search_keywords} (Remote)", "company": "Global Tech LLC", "location": "Remote", "desc": f"This is a fully remote role for a Lead {search_keywords}. You will manage a distributed team and oversee the entire software development lifecycle for our flagship product."}
+                    ]
             else:
-                st.error("Please enter search keywords to generate links.")
+                st.error("Please enter search keywords to simulate a search.")
 
-# --- Simple Password Protection ---
+        if st.session_state.mock_jobs:
+            st.markdown("---")
+            st.subheader("Simulated Job Postings")
+            for i, job in enumerate(st.session_state.mock_jobs):
+                with st.container():
+                    st.markdown(f"<div class='job-card'>", unsafe_allow_html=True)
+                    st.markdown(f"<div class='job-title'>{job['title']}</div>", unsafe_allow_html=True)
+                    st.markdown(f"<div class='company-name'>{job['company']} - {job['location']}</div>", unsafe_allow_html=True)
+                    st.markdown(f"<p>{job['desc']}</p>", unsafe_allow_html=True)
+                    
+                    if st.button("Prepare for this Job", key=f"prepare_{i}"):
+                        st.session_state.job_title_input = job['title']
+                        st.session_state.job_desc_input = job['desc']
+                        st.success(f"Job details for '{job['title']}' loaded into the sidebar!")
+                    
+                    st.markdown(f"</div>", unsafe_allow_html=True)
+
 def check_password():
     """Returns `True` if the user had the correct password."""
     if "password_correct" not in st.session_state:
@@ -221,6 +301,5 @@ def check_password():
     
     return False
 
-# --- Main App Execution ---
 if check_password():
     run_main_app()
