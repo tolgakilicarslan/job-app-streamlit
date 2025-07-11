@@ -54,29 +54,11 @@ def read_pdf(file):
         st.error(f"Error reading PDF file: {e}")
         return None
 
-def search_jobs_api(keywords, location, api_key):
-    """Searches for jobs using the JSearch API."""
-    url = "https://jsearch.p.rapidapi.com/search"
-    query = f"{keywords} in {location}"
-    querystring = {"query": query, "num_pages": "1", "radius": "50"}
-    headers = {
-        "X-RapidAPI-Key": api_key,
-        "X-RapidAPI-Host": "jsearch.p.rapidapi.com"
-    }
-    try:
-        response = requests.get(url, headers=headers, params=querystring, timeout=20)
-        response.raise_for_status()
-        return response.json().get('data', [])
-    except requests.exceptions.RequestException as e:
-        st.error(f"API request failed: {e}")
-        return []
-
 def run_main_app():
     """The main application logic after successful authentication."""
     # --- API Key Configuration ---
     try:
         GEMINI_API_KEY = st.secrets["GEMINI_API_KEY"]
-        JSEARCH_API_KEY = st.secrets["JSEARCH_API_KEY"]
         genai.configure(api_key=GEMINI_API_KEY)
     except (FileNotFoundError, KeyError) as e:
         st.error(f"A required API key is missing from secrets: {e}. Please contact the administrator.")
@@ -86,9 +68,9 @@ def run_main_app():
     model = genai.GenerativeModel('gemini-1.5-flash-latest')
 
     # --- Initialize Session State ---
-    for key in ["messages", "chat_session", "fetched_job_title", "fetched_job_description", "real_jobs", "active_tab"]:
+    for key in ["messages", "chat_session", "fetched_job_title", "fetched_job_description", "active_tab"]:
         if key not in st.session_state:
-            st.session_state[key] = [] if key in ["messages", "real_jobs"] else ""
+            st.session_state[key] = [] if key == "messages" else ""
 
     # --- Sidebar for Inputs ---
     with st.sidebar:
@@ -204,42 +186,31 @@ def run_main_app():
                     st.download_button("Download Latest Response", data=last_content, file_name=file_name)
 
     with tab2:
-        st.header("Live Job Search")
+        st.header("Find Job Postings Online")
+        st.markdown("Enter your desired job title and location to generate direct search links to popular job boards.")
         search_keywords = st.text_input("Keywords (e.g., Python Developer)")
         search_location = st.text_input("Location (e.g., Toronto, ON)")
-        if st.button("Search for Jobs"):
+        
+        if st.button("Generate Job Search Links"):
             if search_keywords:
-                with st.spinner("Searching for live job postings..."):
-                    st.session_state.real_jobs = search_jobs_api(search_keywords, search_location, JSEARCH_API_KEY)
-            else:
-                st.error("Please enter search keywords.")
+                st.markdown("---")
+                st.subheader("Your Custom Job Search Links")
 
-        if st.session_state.real_jobs:
-            st.markdown("---")
-            st.subheader(f"Found {len(st.session_state.real_jobs)} Job Postings")
-            for i, job in enumerate(st.session_state.real_jobs):
-                with st.container():
-                    st.markdown(f"<div class='job-card'>", unsafe_allow_html=True)
-                    st.markdown(f"<div class='job-title'>{job.get('job_title', 'N/A')}</div>", unsafe_allow_html=True)
-                    st.markdown(f"<div class='company-name'>{job.get('employer_name', 'N/A')}</div>", unsafe_allow_html=True)
-                    
-                    details = []
-                    if job.get('employer_website'):
-                        details.append(f"[Company Website]({job.get('employer_website')})")
-                    if job.get('job_employment_type'):
-                        details.append(f"Type: {job.get('job_employment_type').title()}")
-                    if job.get('job_posted_at_datetime_utc'):
-                        post_date = datetime.datetime.fromisoformat(job.get('job_posted_at_datetime_utc').replace('Z', '+00:00'))
-                        details.append(f"Posted: {post_date.strftime('%Y-%m-%d')}")
-                    
-                    st.markdown(f"<div class='job-details'>{' | '.join(details)}</div>", unsafe_allow_html=True)
-                    
-                    if st.button("Prepare for this Job", key=f"prepare_{i}"):
-                        st.session_state.fetched_job_title = job.get('job_title', '')
-                        st.session_state.fetched_job_description = f"{job.get('employer_name', '')}\n\n{job.get('job_description', '')}"
-                        st.success(f"Job details for '{job.get('job_title')}' loaded! Go to the sidebar to generate a document.")
-                        
-                    st.markdown(f"</div>", unsafe_allow_html=True)
+                # URL encode the search terms for safety
+                encoded_keywords = quote(search_keywords)
+                encoded_location = quote(search_location)
+
+                # Generate URLs for popular job boards
+                indeed_url = f"https://www.indeed.com/jobs?q={encoded_keywords}&l={encoded_location}"
+                linkedin_url = f"https://www.linkedin.com/jobs/search/?keywords={encoded_keywords}&location={encoded_location}"
+                google_url = f"https://www.google.com/search?q={encoded_keywords}+jobs+in+{encoded_location}&ibp=htl;jobs"
+
+                # Display links in a clean format
+                st.markdown(f"### [Search on Indeed]({indeed_url})")
+                st.markdown(f"### [Search on LinkedIn]({linkedin_url})")
+                st.markdown(f"### [Search on Google Jobs]({google_url})")
+            else:
+                st.error("Please enter search keywords to generate links.")
 
 # --- Password Protection ---
 def check_password():
