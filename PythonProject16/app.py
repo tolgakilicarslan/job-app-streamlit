@@ -9,6 +9,7 @@ from urllib.parse import quote
 from fpdf import FPDF
 from PIL import Image
 import random
+import re
 
 # --- Page Configuration ---
 st.set_page_config(layout="wide", page_title="AI Job Application Helper")
@@ -138,11 +139,14 @@ def fetch_job_details_from_url(_model, url):
         st.error(f"Error fetching or parsing URL: {e}")
         return "", ""
 
-def search_jobs_api(keywords, location, api_key):
-    """Searches for jobs using the JSearch API."""
-    url = "https://jsearch.p.rapidapi.com/search"
+def search_jobs_api(keywords, location, api_key, page=1, required_skills=""):
+    """Searches for jobs using the JSearch API with pagination and skill filtering."""
     query = f"{keywords} in {location}"
-    querystring = {"query": query, "num_pages": "1", "radius": "50"}
+    if required_skills:
+        query += f" with skills in {required_skills}"
+        
+    url = "https://jsearch.p.rapidapi.com/search"
+    querystring = {"query": query, "num_pages": "1", "page": str(page)}
     headers = {
         "X-RapidAPI-Key": api_key,
         "X-RapidAPI-Host": "jsearch.p.rapidapi.com"
@@ -168,7 +172,7 @@ def run_main_app():
     """The main application logic after successful authentication."""
     try:
         GEMINI_API_KEY = st.secrets["GEMINI_API_KEY"]
-        JSEARCH_API_KEY = st.secrets["JSEARCH_API_KEY"] # Added JSearch key check
+        JSEARCH_API_KEY = st.secrets["JSEARCH_API_KEY"]
         genai.configure(api_key=GEMINI_API_KEY)
     except (FileNotFoundError, KeyError) as e:
         st.error(f"A required API key is missing from secrets: {e}. Please contact the administrator.")
@@ -176,15 +180,24 @@ def run_main_app():
 
     model = genai.GenerativeModel('gemini-1.5-flash-latest')
 
-    for key in ["messages", "chat_session", "job_title_input", "job_desc_input", "live_jobs"]:
+    for key in ["messages", "chat_session", "job_title_input", "job_desc_input", "live_jobs", "current_page", "resume_text"]:
         if key not in st.session_state:
-            st.session_state[key] = [] if key in ["messages", "live_jobs"] else ""
+            st.session_state[key] = [] if key in ["messages", "live_jobs"] else 1 if key == "current_page" else ""
 
     with st.sidebar:
         st.header("Your Details & Job Info")
         st.markdown("---")
         resume_file = st.file_uploader("1. Upload Resume (PDF/TXT)", type=["pdf", "txt"])
         resume_image = st.file_uploader("Or Upload Resume Image (PNG/JPG)", type=["png", "jpg", "jpeg"])
+
+        if resume_file or resume_image:
+            with st.spinner("Reading resume..."):
+                if resume_image:
+                    img = Image.open(resume_image)
+                    response = model.generate_content(["Extract all text from this resume image.", img])
+                    st.session_state.resume_text = response.text
+                elif resume_file:
+                    st.session_state.resume_text = read_pdf(resume_file) if resume_file.name.endswith(".pdf") else resume_file.read().decode("utf-8")
         
         st.header("Job Details")
         st.markdown("---")
@@ -212,37 +225,27 @@ def run_main_app():
         )
 
         if st.button("✨ Generate Initial Draft", use_container_width=True, type="primary"):
-            if (resume_file or resume_image) and st.session_state.job_title_input and st.session_state.job_desc_input:
-                resume_text = ""
-                with st.spinner("Reading resume..."):
-                    if resume_image:
-                        img = Image.open(resume_image)
-                        response = model.generate_content(["Extract all text from this resume image.", img])
-                        resume_text = response.text
-                    elif resume_file:
-                        resume_text = read_pdf(resume_file) if resume_file.name.endswith(".pdf") else resume_file.read().decode("utf-8")
+            if st.session_state.resume_text and st.session_state.job_title_input and st.session_state.job_desc_input:
+                st.session_state.chat_session = model.start_chat(history=[])
+                st.session_state.messages = []
+                
+                company_name = st.session_state.job_desc_input.splitlines()[0] if st.session_state.job_desc_input.splitlines() else st.session_state.job_title_input
+                
+                prompts = {
+                    "Generate Cover Letter": f"First, analyze the provided resume text and extract the following details: Full Name, Full Address, Phone Number, and Email. If a LinkedIn URL is present, extract it as well. Second, using the extracted details, write a complete and professional cover letter for the job of '{st.session_state.job_title_input}'. The cover letter MUST start with a professional header formatted exactly like this, using the extracted information:\n[Your Name]\n[Your Address]\n[Your Phone Number] | [Your Email] | [Your LinkedIn Profile URL (if found)]\n\n{datetime.date.today().strftime('%B %d, %Y')}\n\nHiring Manager\n{company_name}\n\nDear Hiring Manager,\n[Continue with the body of the cover letter, tailored to the job description and resume.]\n\n**My Resume:**\n{st.session_state.resume_text}\n\n**Job Description:**\n{st.session_state.job_desc_input}",
+                    "Tailor Resume for Job": f"Act as a professional resume editor. Your task is to tailor the following resume to better match the given job description. Output the complete, updated resume text in Markdown format.\n\n**My Original Resume:**\n{st.session_state.resume_text}\n\n**Job Title:**\n{st.session_state.job_title_input}\n\n**Job Description:**\n{st.session_state.job_desc_input}",
+                    "Prepare for Interview": f"Act as an experienced hiring manager. Generate 10 common and insightful interview questions for the '{st.session_state.job_title_input}' role, based on the provided job description and my resume. For each question, provide a sample answer.\n\n**My Resume:**\n{st.session_state.resume_text}\n\n**Job Description:**\n{st.session_state.job_desc_input}",
+                    "Skill Gap Analysis": f"Act as a career advisor. Analyze my resume against the job description. Identify key skills I am missing and list them. Then, suggest specific online courses, certifications, or projects I could undertake to fill these gaps.\n\n**My Resume:**\n{st.session_state.resume_text}\n\n**Job Title:**\n{st.session_state.job_title_input}\n\n**Job Description:**\n{st.session_state.job_desc_input}"
+                }
+                prompt = prompts[action]
 
-                if resume_text:
-                    st.session_state.chat_session = model.start_chat(history=[])
-                    st.session_state.messages = []
-                    
-                    company_name = st.session_state.job_desc_input.splitlines()[0] if st.session_state.job_desc_input.splitlines() else st.session_state.job_title_input
-                    
-                    prompts = {
-                        "Generate Cover Letter": f"First, analyze the provided resume text and extract the following details: Full Name, Full Address, Phone Number, and Email. If a LinkedIn URL is present, extract it as well. Second, using the extracted details, write a complete and professional cover letter for the job of '{st.session_state.job_title_input}'. The cover letter MUST start with a professional header formatted exactly like this, using the extracted information:\n[Your Name]\n[Your Address]\n[Your Phone Number] | [Your Email] | [Your LinkedIn Profile URL (if found)]\n\n{datetime.date.today().strftime('%B %d, %Y')}\n\nHiring Manager\n{company_name}\n\nDear Hiring Manager,\n[Continue with the body of the cover letter, tailored to the job description and resume.]\n\n**My Resume:**\n{resume_text}\n\n**Job Description:**\n{st.session_state.job_desc_input}",
-                        "Tailor Resume for Job": f"Act as a professional resume editor. Your task is to tailor the following resume to better match the given job description. Output the complete, updated resume text in Markdown format.\n\n**My Original Resume:**\n{resume_text}\n\n**Job Title:**\n{st.session_state.job_title_input}\n\n**Job Description:**\n{st.session_state.job_desc_input}",
-                        "Prepare for Interview": f"Act as an experienced hiring manager. Generate 10 common and insightful interview questions for the '{st.session_state.job_title_input}' role, based on the provided job description and my resume. For each question, provide a sample answer.\n\n**My Resume:**\n{resume_text}\n\n**Job Description:**\n{st.session_state.job_desc_input}",
-                        "Skill Gap Analysis": f"Act as a career advisor. Analyze my resume against the job description. Identify key skills I am missing and list them. Then, suggest specific online courses, certifications, or projects I could undertake to fill these gaps.\n\n**My Resume:**\n{resume_text}\n\n**Job Title:**\n{st.session_state.job_title_input}\n\n**Job Description:**\n{st.session_state.job_desc_input}"
-                    }
-                    prompt = prompts[action]
-
-                    with st.spinner("🤖 Gemini is generating the first draft..."):
-                        try:
-                            response = st.session_state.chat_session.send_message(prompt)
-                            st.session_state.messages.append({"role": "assistant", "content": response.text})
-                            st.success("Draft generated!")
-                        except Exception as e:
-                            st.error(f"An error occurred with the Gemini API: {e}")
+                with st.spinner("🤖 Gemini is generating the first draft..."):
+                    try:
+                        response = st.session_state.chat_session.send_message(prompt)
+                        st.session_state.messages.append({"role": "assistant", "content": response.text})
+                        st.success("Draft generated!")
+                    except Exception as e:
+                        st.error(f"An error occurred with the Gemini API: {e}")
             else:
                 st.error("Please provide a resume, job title, and description.")
 
@@ -294,15 +297,37 @@ def run_main_app():
     with tab2:
         st.header("Live Job Search")
         st.markdown("Find real job postings and instantly prepare application materials.")
-        search_keywords = st.text_input("Keywords (e.g., Software Engineer)")
-        search_location = st.text_input("Location (e.g., Toronto, ON)")
         
-        if st.button("Search for Jobs"):
-            if search_keywords:
-                with st.spinner("Searching for live job postings..."):
-                    st.session_state.live_jobs = search_jobs_api(search_keywords, search_location, JSEARCH_API_KEY)
-            else:
-                st.error("Please enter search keywords to begin a search.")
+        with st.form("search_form"):
+            col1, col2 = st.columns(2)
+            with col1:
+                search_keywords = st.text_input("Keywords (e.g., Software Engineer)")
+                required_skills = st.text_input("Required Skills (comma-separated)", help="e.g., python, pandas, sql")
+            with col2:
+                search_location = st.text_input("Location (e.g., Toronto, ON)")
+                exclude_keywords = st.text_input("Exclude Keywords (comma-separated)", help="e.g., manager, lead, principal")
+            
+            submitted = st.form_submit_button("Search for Jobs")
+            if submitted:
+                st.session_state.current_page = 1
+                st.session_state.live_jobs = []
+
+        if submitted and search_keywords:
+            with st.spinner("Searching for live job postings..."):
+                all_results = search_jobs_api(search_keywords, search_location, JSEARCH_API_KEY, st.session_state.current_page, required_skills)
+                
+                # Client-side filtering for excluded keywords
+                if exclude_keywords:
+                    excluded = [kw.strip().lower() for kw in exclude_keywords.split(',')]
+                    filtered_results = []
+                    for job in all_results:
+                        title = job.get('job_title', '').lower()
+                        description = job.get('job_description', '').lower()
+                        if not any(kw in title or kw in description for kw in excluded):
+                            filtered_results.append(job)
+                    st.session_state.live_jobs = filtered_results
+                else:
+                    st.session_state.live_jobs = all_results
 
         if st.session_state.live_jobs:
             st.markdown("---")
@@ -319,9 +344,25 @@ def run_main_app():
                     st.markdown(f"<div class='company-name'>{job.get('employer_name', 'N/A')} - {job.get('job_city', 'N/A')}</div>", unsafe_allow_html=True)
                     st.markdown("</div></div>", unsafe_allow_html=True)
 
-                    match_rate = random.randint(65, 95)
-                    details = [f"<span class='match-rate'>✔ {match_rate}% Match (Simulated)</span>"]
+                    details = []
                     
+                    # Match Rate Calculation
+                    if 'match_rate' in job:
+                        details.append(f"<span class='match-rate'>✔ {job['match_rate']}% Match</span>")
+                    elif st.session_state.resume_text:
+                        if st.button("Calculate Match Rate", key=f"match_{i}"):
+                            with st.spinner("AI is calculating match rate..."):
+                                match_prompt = f"On a scale of 0 to 100, how well does this resume match the following job description? Provide only the number. Resume: {st.session_state.resume_text}\n\nJob Description: {job.get('job_description', '')}"
+                                match_response = model.generate_content(match_prompt)
+                                try:
+                                    # Extract number from response
+                                    rate = int(re.search(r'\d+', match_response.text).group())
+                                    st.session_state.live_jobs[i]['match_rate'] = rate
+                                    st.rerun()
+                                except (ValueError, AttributeError):
+                                    st.session_state.live_jobs[i]['match_rate'] = "N/A"
+                                    st.rerun()
+
                     job_link = job.get('job_apply_link', '#')
                     details.append(f"**Source:** <a href='{job_link}' target='_blank'>{job.get('job_publisher', 'N/A')}</a>")
                     
@@ -329,7 +370,6 @@ def run_main_app():
                         post_date = datetime.datetime.fromisoformat(job.get('job_posted_at_datetime_utc').replace('Z', '+00:00'))
                         details.append(f"**Posted:** {post_date.strftime('%b %d, %Y')}")
                     
-                    # API does not provide applicant count, so we simulate it.
                     details.append(f"**Applicants:** {random.randint(5, 100)} (Simulated)")
                     
                     st.markdown(f"<div class='job-details'>{' | '.join(details)}</div>", unsafe_allow_html=True)
@@ -343,6 +383,22 @@ def run_main_app():
                         st.success(f"Job details for '{job.get('job_title')}' loaded into the sidebar!")
                     
                     st.markdown(f"</div>", unsafe_allow_html=True)
+
+            # Pagination controls
+            st.markdown("---")
+            col1, col2, col3 = st.columns([1, 1, 1])
+            with col1:
+                if st.session_state.current_page > 1:
+                    if st.button("⬅️ Previous Page"):
+                        st.session_state.current_page -= 1
+                        st.rerun()
+            with col2:
+                st.write(f"Page {st.session_state.current_page}")
+            with col3:
+                if len(st.session_state.live_jobs) > 0: # Show next only if results were found
+                    if st.button("Next Page ➡️"):
+                        st.session_state.current_page += 1
+                        st.rerun()
 
 def check_password():
     """Returns `True` if the user had the correct password."""
