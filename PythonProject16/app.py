@@ -139,14 +139,17 @@ def fetch_job_details_from_url(_model, url):
         st.error(f"Error fetching or parsing URL: {e}")
         return "", ""
 
-def search_jobs_api(keywords, location, api_key, page=1, required_skills=""):
+def search_jobs_api(keywords, location, api_key, page=1, required_skills="", remote_only=False):
     """Searches for jobs using the JSearch API with pagination and skill filtering."""
     query = f"{keywords} in {location}"
     if required_skills:
         query += f" with skills in {required_skills}"
         
     url = "https://jsearch.p.rapidapi.com/search"
-    querystring = {"query": query, "num_pages": "1", "page": str(page)}
+    querystring = {"query": query, "page": str(page)}
+    if remote_only:
+        querystring["remote_jobs_only"] = "true"
+        
     headers = {
         "X-RapidAPI-Key": api_key,
         "X-RapidAPI-Host": "jsearch.p.rapidapi.com"
@@ -180,9 +183,9 @@ def run_main_app():
 
     model = genai.GenerativeModel('gemini-1.5-flash-latest')
 
-    for key in ["messages", "chat_session", "job_title_input", "job_desc_input", "live_jobs", "current_page", "resume_text"]:
+    for key in ["messages", "chat_session", "job_title_input", "job_desc_input", "live_jobs", "current_page", "resume_text", "search_params"]:
         if key not in st.session_state:
-            st.session_state[key] = [] if key in ["messages", "live_jobs"] else 1 if key == "current_page" else ""
+            st.session_state[key] = [] if key in ["messages", "live_jobs"] else 1 if key == "current_page" else {} if key == "search_params" else ""
 
     with st.sidebar:
         st.header("Your Details & Job Info")
@@ -190,14 +193,16 @@ def run_main_app():
         resume_file = st.file_uploader("1. Upload Resume (PDF/TXT)", type=["pdf", "txt"])
         resume_image = st.file_uploader("Or Upload Resume Image (PNG/JPG)", type=["png", "jpg", "jpeg"])
 
-        if resume_file or resume_image:
-            with st.spinner("Reading resume..."):
-                if resume_image:
-                    img = Image.open(resume_image)
-                    response = model.generate_content(["Extract all text from this resume image.", img])
-                    st.session_state.resume_text = response.text
-                elif resume_file:
-                    st.session_state.resume_text = read_pdf(resume_file) if resume_file.name.endswith(".pdf") else resume_file.read().decode("utf-8")
+        if 'resume_text' not in st.session_state:
+            st.session_state.resume_text = ""
+            
+        if resume_file and not st.session_state.resume_text:
+            st.session_state.resume_text = read_pdf(resume_file) if resume_file.name.endswith(".pdf") else resume_file.read().decode("utf-8")
+        elif resume_image and not st.session_state.resume_text:
+            img = Image.open(resume_image)
+            with st.spinner("Reading resume image..."):
+                response = model.generate_content(["Extract all text from this resume image.", img])
+                st.session_state.resume_text = response.text
         
         st.header("Job Details")
         st.markdown("---")
@@ -307,18 +312,26 @@ def run_main_app():
                 search_location = st.text_input("Location (e.g., Toronto, ON)")
                 exclude_keywords = st.text_input("Exclude Keywords (comma-separated)", help="e.g., manager, lead, principal")
             
+            remote_only = st.checkbox("Search for remote jobs only")
+            
             submitted = st.form_submit_button("Search for Jobs")
             if submitted:
                 st.session_state.current_page = 1
-                st.session_state.live_jobs = []
+                st.session_state.search_params = {
+                    "keywords": search_keywords,
+                    "location": search_location,
+                    "skills": required_skills,
+                    "exclude": exclude_keywords,
+                    "remote": remote_only
+                }
 
-        if submitted and search_keywords:
+        if st.session_state.search_params.get("keywords"):
             with st.spinner("Searching for live job postings..."):
-                all_results = search_jobs_api(search_keywords, search_location, JSEARCH_API_KEY, st.session_state.current_page, required_skills)
+                params = st.session_state.search_params
+                all_results = search_jobs_api(params["keywords"], params["location"], JSEARCH_API_KEY, st.session_state.current_page, params["skills"], params["remote"])
                 
-                # Client-side filtering for excluded keywords
-                if exclude_keywords:
-                    excluded = [kw.strip().lower() for kw in exclude_keywords.split(',')]
+                if params["exclude"]:
+                    excluded = [kw.strip().lower() for kw in params["exclude"].split(',')]
                     filtered_results = []
                     for job in all_results:
                         title = job.get('job_title', '').lower()
@@ -331,7 +344,7 @@ def run_main_app():
 
         if st.session_state.live_jobs:
             st.markdown("---")
-            st.subheader(f"Found {len(st.session_state.live_jobs)} Job Postings")
+            st.subheader(f"Displaying Page {st.session_state.current_page}")
             for i, job in enumerate(st.session_state.live_jobs):
                 with st.container():
                     st.markdown(f"<div class='job-card'>", unsafe_allow_html=True)
@@ -346,7 +359,6 @@ def run_main_app():
 
                     details = []
                     
-                    # Match Rate Calculation
                     if 'match_rate' in job:
                         details.append(f"<span class='match-rate'>✔ {job['match_rate']}% Match</span>")
                     elif st.session_state.resume_text:
@@ -355,7 +367,6 @@ def run_main_app():
                                 match_prompt = f"On a scale of 0 to 100, how well does this resume match the following job description? Provide only the number. Resume: {st.session_state.resume_text}\n\nJob Description: {job.get('job_description', '')}"
                                 match_response = model.generate_content(match_prompt)
                                 try:
-                                    # Extract number from response
                                     rate = int(re.search(r'\d+', match_response.text).group())
                                     st.session_state.live_jobs[i]['match_rate'] = rate
                                     st.rerun()
@@ -384,7 +395,6 @@ def run_main_app():
                     
                     st.markdown(f"</div>", unsafe_allow_html=True)
 
-            # Pagination controls
             st.markdown("---")
             col1, col2, col3 = st.columns([1, 1, 1])
             with col1:
@@ -395,7 +405,7 @@ def run_main_app():
             with col2:
                 st.write(f"Page {st.session_state.current_page}")
             with col3:
-                if len(st.session_state.live_jobs) > 0: # Show next only if results were found
+                if len(st.session_state.live_jobs) > 0:
                     if st.button("Next Page ➡️"):
                         st.session_state.current_page += 1
                         st.rerun()
