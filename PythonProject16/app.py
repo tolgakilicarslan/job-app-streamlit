@@ -6,9 +6,7 @@ import requests
 from bs4 import BeautifulSoup
 import datetime
 from urllib.parse import quote
-import streamlit_authenticator as stauth
 from fpdf import FPDF
-import yaml
 from PIL import Image
 
 # --- Page Configuration ---
@@ -131,9 +129,6 @@ def run_main_app():
                             st.error(f"An error occurred with the Gemini API: {e}")
             else:
                 st.error("Please provide a resume, job title, and description.")
-        
-        st.markdown("---")
-        st.session_state.authenticator.logout('Logout', 'sidebar')
 
     # --- Main App Interface with Tabs ---
     st.title("AI Job Application Helper")
@@ -199,45 +194,33 @@ def run_main_app():
             else:
                 st.error("Please enter search keywords to generate links.")
 
-# --- Authentication Setup ---
-# For production, move this config to a .streamlit/config.yaml file
-# and add the file to your .gitignore
-config = {
-    'credentials': {
-        'usernames': {
-            'user1': {
-                'email': 'user1@example.com',
-                'name': 'User One',
-                # To generate a new hashed password, run:
-                # import streamlit_authenticator as stauth
-                # print(stauth.Hasher(['your_password']).generate())
-                'password': '$2b$12$EixZaY93b01Ld9p4p4p4p.q9uFQUdD2yI/5TjK.ZtO2w3T2b9QjS' # Hashed "pass123"
-            },
-            'user2': {
-                'email': 'user2@example.com',
-                'name': 'User Two',
-                'password': '$2b$12$EixZaY93b01Ld9p4p4p4p.q9uFQUdD2yI/5TjK.ZtO2w3T2b9QjS' # Hashed "pass123"
-            }
-        }
-    },
-    'cookie': {'expiry_days': 30, 'key': 'some_random_signature_key', 'name': 'some_cookie_name'},
-    'preauthorized': {'emails': ['preauth@example.com']}
-}
+# --- Simple Password Protection ---
+def check_password():
+    """Returns `True` if the user had the correct password."""
+    if "password_correct" not in st.session_state:
+        st.session_state.password_correct = False
 
-authenticator = stauth.Authenticate(
-    config,
-    cookie_name='job_helper_cookie',
-    key='job_helper_key',
-    cookie_expiry_days=30,
-)
-st.session_state.authenticator = authenticator
+    if st.session_state.password_correct:
+        return True
 
-# --- Login Page ---
-name, authentication_status, username = authenticator.login('main')
+    try:
+        correct_password = st.secrets["APP_PASSWORD"]
+    except (FileNotFoundError, KeyError):
+        st.error("APP_PASSWORD secret not found. Please contact the administrator.")
+        st.stop()
+        
+    st.title("Password Required")
+    password = st.text_input("Enter password to access the application", type="password")
 
-if authentication_status is False:
-    st.error('Username/password is incorrect')
-elif authentication_status is None:
-    st.warning('Please enter your username and password')
-elif authentication_status:
+    if st.button("Login"):
+        if password == correct_password:
+            st.session_state.password_correct = True
+            st.rerun()
+        else:
+            st.error("The password you entered is incorrect.")
+    
+    return False
+
+# --- Main App Execution ---
+if check_password():
     run_main_app()
