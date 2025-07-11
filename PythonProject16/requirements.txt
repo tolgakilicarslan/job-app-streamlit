@@ -3,3 +3,7 @@ google-generativeai
 PyPDF2
 requests
 beautifulsoup4
+streamlit-authenticator
+fpdf
+PyYAML
+Pillow
