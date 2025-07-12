@@ -134,16 +134,16 @@ def format_salary(job):
 def get_gspread_client():
     """Connects to Google Sheets using credentials from Streamlit secrets."""
     try:
-        # Streamlit automatically parses the TOML secret into a dictionary-like object.
-        # We pass this object directly to the credentials method.
-        creds_dict = st.secrets["gcp_service_account"]
+        # The secret is read as a string, so we need to parse it into a dictionary
+        creds_str = st.secrets["gcp_service_account"]
+        creds_dict = json.loads(creds_str)
         scopes = ['https://www.googleapis.com/auth/spreadsheets']
         creds = Credentials.from_service_account_info(creds_dict, scopes=scopes)
         client = gspread.authorize(creds)
         return client
     except Exception as e:
         st.error(f"Failed to connect to Google Sheets: {e}")
-        st.info("Please ensure your `gcp_service_account` secret in Streamlit Cloud is a valid JSON object and the service account has been shared with your Google Sheet with 'Editor' permissions.")
+        st.info("Please ensure your `gcp_service_account` secret in Streamlit Cloud is a valid JSON object (wrapped in triple quotes) and the service account has been shared with your Google Sheet with 'Editor' permissions.")
         return None
 
 @st.cache_data(ttl=600) # Cache for 10 minutes
