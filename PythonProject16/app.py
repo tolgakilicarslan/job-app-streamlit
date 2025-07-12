@@ -1,4 +1,3 @@
-```python
 import streamlit as st
 import google.generativeai as genai
 import PyPDF2
@@ -599,4 +598,3 @@ def check_password():
 
 if check_password():
     run_main_app()
-```
