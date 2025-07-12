@@ -1,3 +1,4 @@
+```python
 import streamlit as st
 import google.generativeai as genai
 import PyPDF2
@@ -77,13 +78,22 @@ def fetch_job_details_from_url(_model, url):
 
 def search_jobs_api(keywords, location, api_key, page=1, required_skills="", remote_only=False, date_posted="all", country=""):
     """Searches for jobs using the JSearch API with pagination and skill filtering."""
-    full_location = f"{location}, {country}" if location and country != "Any" else location or country
-    query = f"{keywords} in {full_location}"
+    full_location = ""
+    if location:
+        full_location = location
+    if country != "Any":
+        if full_location:
+            full_location += ", "
+        full_location += country
+    
+    query = keywords
+    if full_location:
+        query += f" in {full_location}"
     if required_skills:
         query += f" with skills in {required_skills}"
         
     url = "https://jsearch.p.rapidapi.com/search"
-    querystring = {"query": query, "page": str(page), "num_pages": "5", "date_posted": date_posted}
+    querystring = {"query": query, "page": str(page), "num_pages": "1", "date_posted": date_posted}
     if remote_only:
         querystring["remote_jobs_only"] = "true"
         
@@ -134,16 +144,16 @@ def format_salary(job):
 def get_gspread_client():
     """Connects to Google Sheets using credentials from Streamlit secrets."""
     try:
-        # The secret is read as a string, so we need to parse it into a dictionary
-        creds_str = st.secrets["gcp_service_account"]
-        creds_dict = json.loads(creds_str)
+        # Streamlit automatically parses the TOML secret into a dictionary-like object.
+        # We pass this object directly to the credentials method.
+        creds_dict = st.secrets["gcp_service_account"]
         scopes = ['https://www.googleapis.com/auth/spreadsheets']
         creds = Credentials.from_service_account_info(creds_dict, scopes=scopes)
         client = gspread.authorize(creds)
         return client
     except Exception as e:
         st.error(f"Failed to connect to Google Sheets: {e}")
-        st.info("Please ensure your `gcp_service_account` secret in Streamlit Cloud is a valid JSON object (wrapped in triple quotes) and the service account has been shared with your Google Sheet with 'Editor' permissions.")
+        st.info("Please ensure your `gcp_service_account` secret in Streamlit Cloud is a valid JSON object and the service account has been shared with your Google Sheet with 'Editor' permissions.")
         return None
 
 @st.cache_data(ttl=600) # Cache for 10 minutes
@@ -522,14 +532,13 @@ def run_main_app():
                         highlights = job.get('job_highlights')
                         if highlights:
                             st.markdown("---")
-                            if highlights.get('Qualifications'):
-                                st.markdown("<h5>Qualifications</h5>", unsafe_allow_html=True)
-                                for q in highlights['Qualifications']:
-                                    st.markdown(f"- {q}")
-                            if highlights.get('Responsibilities'):
-                                st.markdown("<h5>Responsibilities</h5>", unsafe_allow_html=True)
-                                for r in highlights['Responsibilities']:
-                                    st.markdown(f"- {r}")
+                            for section in highlights:
+                                title = section.get('title', '')
+                                items = section.get('items', [])
+                                if title and items:
+                                    st.markdown(f"<h5>{title}</h5>", unsafe_allow_html=True)
+                                    for item in items:
+                                        st.markdown(f"- {item}")
 
                     col1, col2 = st.columns(2)
                     with col1:
@@ -590,3 +599,4 @@ def check_password():
 
 if check_password():
     run_main_app()
+```
