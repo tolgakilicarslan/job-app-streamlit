@@ -175,7 +175,6 @@ def log_applied_job(client, sheet_url, job_data):
         return False
     try:
         sheet = client.open_by_url(sheet_url).worksheet("Jobs")
-        # Add "Job Description" to the header
         header = ["Job ID", "Date Applied", "Company", "Job Title", "Location", "Salary", "Source", "Link", "Job Description"]
         
         if not sheet.row_values(1) or sheet.row_values(1) != header:
@@ -190,9 +189,34 @@ def log_applied_job(client, sheet_url, job_data):
             format_salary(job_data) or "N/A",
             job_data.get("job_publisher", ""),
             job_data.get("job_apply_link", ""),
-            job_data.get("job_description", "") # Add job description to the row
+            job_data.get("job_description", "") 
         ]
         sheet.append_row(row_to_insert)
+        
+        # Get the index of the newly added row
+        new_row_index = len(sheet.get_all_values())
+        
+        # Format the new row to have a height of 120 pixels
+        body = {
+            "requests": [
+                {
+                    "updateDimensionProperties": {
+                        "range": {
+                            "sheetId": sheet.id,
+                            "dimension": "ROWS",
+                            "startIndex": new_row_index - 1, # API is 0-indexed
+                            "endIndex": new_row_index
+                        },
+                        "properties": {
+                            "pixelSize": 120
+                        },
+                        "fields": "pixelSize"
+                    }
+                }
+            ]
+        }
+        sheet.spreadsheet.batch_update(body)
+
         return True
     except Exception as e:
         st.error(f"Failed to log job to Google Sheet: {e}")
