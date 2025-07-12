@@ -83,7 +83,6 @@ def search_jobs_api(keywords, location, api_key, page=1, required_skills="", rem
         query += f" with skills in {required_skills}"
         
     url = "https://jsearch.p.rapidapi.com/search"
-    # Set num_pages to 5 to fetch up to 100 results (20 per page)
     querystring = {"query": query, "page": str(page), "num_pages": "5", "date_posted": date_posted}
     if remote_only:
         querystring["remote_jobs_only"] = "true"
@@ -139,7 +138,6 @@ def get_gspread_client():
         st.warning("Google Sheets integration is disabled. Please set `gcp_service_account` in your secrets.", icon="⚠️")
         return None
     try:
-        # Streamlit automatically parses TOML secrets into a dictionary-like object.
         scopes = ['https://www.googleapis.com/auth/spreadsheets']
         creds = Credentials.from_service_account_info(dict(creds_info), scopes=scopes)
         client = gspread.authorize(creds)
@@ -584,6 +582,7 @@ def run_main_app():
                         if st.button("Log as Applied", key=f"log_{i}"):
                             if log_applied_job(gs_client, G_SHEET_URL, job):
                                 st.success(f"Logged '{job.get('job_title')}' as applied!")
+                                get_applied_job_ids.clear() # Clear cache to refresh applied jobs list
                                 st.session_state.live_jobs.pop(i)
                                 st.rerun()
                     
