@@ -139,14 +139,14 @@ def fetch_job_details_from_url(_model, url):
         st.error(f"Error fetching or parsing URL: {e}")
         return "", ""
 
-def search_jobs_api(keywords, location, api_key, page=1, required_skills="", remote_only=False):
+def search_jobs_api(keywords, location, api_key, page=1, required_skills="", remote_only=False, date_posted="all"):
     """Searches for jobs using the JSearch API with pagination and skill filtering."""
     query = f"{keywords} in {location}"
     if required_skills:
         query += f" with skills in {required_skills}"
         
     url = "https://jsearch.p.rapidapi.com/search"
-    querystring = {"query": query, "page": str(page)}
+    querystring = {"query": query, "page": str(page), "date_posted": date_posted}
     if remote_only:
         querystring["remote_jobs_only"] = "true"
         
@@ -336,8 +336,14 @@ def run_main_app():
                 search_location = st.text_input("Location (e.g., Toronto, ON)")
                 exclude_keywords = st.text_input("Exclude Keywords (comma-separated)", help="e.g., manager, lead, principal")
             
-            remote_only = st.checkbox("Search for remote jobs only")
-            
+            col3, col4 = st.columns(2)
+            with col3:
+                remote_only = st.checkbox("Search for remote jobs only")
+            with col4:
+                date_posted_options = {"All Time": "all", "Past 24 hours": "today", "Past 3 days": "3days", "Past Week": "week", "Past Month": "month"}
+                date_posted_selection = st.selectbox("Date Posted", options=list(date_posted_options.keys()))
+                date_posted_api_value = date_posted_options[date_posted_selection]
+
             submitted = st.form_submit_button("Search for Jobs")
             if submitted:
                 st.session_state.current_page = 1
@@ -346,7 +352,8 @@ def run_main_app():
                     "location": search_location,
                     "skills": required_skills,
                     "exclude": exclude_keywords,
-                    "remote": remote_only
+                    "remote": remote_only,
+                    "date_posted": date_posted_api_value
                 }
                 st.session_state.live_jobs = [] 
                 st.session_state.total_jobs = 0
@@ -354,7 +361,7 @@ def run_main_app():
         if st.session_state.search_params.get("keywords"):
             with st.spinner(f"Searching for jobs on page {st.session_state.current_page}..."):
                 params = st.session_state.search_params
-                api_response = search_jobs_api(params["keywords"], params["location"], JSEARCH_API_KEY, st.session_state.current_page, params["skills"], params["remote"])
+                api_response = search_jobs_api(params["keywords"], params["location"], JSEARCH_API_KEY, st.session_state.current_page, params["skills"], params["remote"], params["date_posted"])
                 
                 if api_response:
                     all_results = api_response.get('data', [])
