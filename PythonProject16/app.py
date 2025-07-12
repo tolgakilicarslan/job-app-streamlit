@@ -8,9 +8,11 @@ import datetime
 from urllib.parse import quote
 from fpdf import FPDF
 from PIL import Image
+import random
 import re
 import gspread
 from google.oauth2.service_account import Credentials
+import pandas as pd
 import json
 
 # --- Page Configuration ---
@@ -75,22 +77,14 @@ def fetch_job_details_from_url(_model, url):
 
 def search_jobs_api(keywords, location, api_key, page=1, required_skills="", remote_only=False, date_posted="all", country=""):
     """Searches for jobs using the JSearch API with pagination and skill filtering."""
-    full_location = ""
-    if location:
-        full_location = location
-    if country != "Any":
-        if full_location:
-            full_location += ", "
-        full_location += country
-    
-    query = keywords
-    if full_location:
-        query += f" in {full_location}"
+    full_location = f"{location}, {country}" if location and country != "Any" else location or country
+    query = f"{keywords} in {full_location}"
     if required_skills:
         query += f" with skills in {required_skills}"
         
     url = "https://jsearch.p.rapidapi.com/search"
-    querystring = {"query": query, "page": str(page), "num_pages": "1", "date_posted": date_posted}
+    # Set num_pages to 5 to fetch up to 100 results (20 per page)
+    querystring = {"query": query, "page": str(page), "num_pages": "5", "date_posted": date_posted}
     if remote_only:
         querystring["remote_jobs_only"] = "true"
         
@@ -141,30 +135,18 @@ def format_salary(job):
 def get_gspread_client():
     """Connects to Google Sheets using credentials from Streamlit secrets."""
     creds_info = st.secrets.get("gcp_service_account")
-    if creds_info is None:
-        st.warning("gcp_service_account secret not set. Google Sheets integration disabled.")
+    if not creds_info:
+        st.warning("Google Sheets integration is disabled. Please set `gcp_service_account` in your secrets.", icon="⚠️")
         return None
     try:
-        if isinstance(creds_info, str):
-            try:
-                creds_info = json.loads(creds_info)
-            except json.JSONDecodeError as json_err:
-                st.error(f"Invalid JSON format in 'gcp_service_account' secret: {json_err}")
-                st.info("Please ensure your `gcp_service_account` secret in Streamlit Cloud is either a valid TOML section with key-value pairs (e.g., [gcp_service_account]\ntype = \"service_account\"\n...) or a valid JSON string with newlines in 'private_key' escaped as \\n, and that the service account has 'Editor' permissions on your Google Sheet.")
-                return None
-        creds_info = dict(creds_info)
-        # Clean up private_key to remove extra leading/trailing newlines
-        if 'private_key' in creds_info:
-            creds_info['private_key'] = creds_info['private_key'].strip()
-            if not creds_info['private_key'].startswith('-----BEGIN PRIVATE KEY-----'):
-                creds_info['private_key'] = '-----BEGIN PRIVATE KEY-----\n' + creds_info['private_key'] + '\n-----END PRIVATE KEY-----'
+        # Streamlit automatically parses TOML secrets into a dictionary-like object.
         scopes = ['https://www.googleapis.com/auth/spreadsheets']
-        creds = Credentials.from_service_account_info(creds_info, scopes=scopes)
+        creds = Credentials.from_service_account_info(dict(creds_info), scopes=scopes)
         client = gspread.authorize(creds)
         return client
     except Exception as e:
         st.error(f"Failed to connect to Google Sheets: {e}")
-        st.info("Please ensure your `gcp_service_account` secret in Streamlit Cloud is either a valid TOML section with key-value pairs (e.g., [gcp_service_account]\ntype = \"service_account\"\n...) or a valid JSON string with newlines in 'private_key' escaped as \\n, and that the service account has 'Editor' permissions on your Google Sheet.")
+        st.info("Please ensure your `gcp_service_account` secret in Streamlit Cloud is a valid TOML section with key-value pairs (e.g., [gcp_service_account]\ntype = \"service_account\"\n...) and that the service account has 'Editor' permissions on your Google Sheet.")
         return None
 
 @st.cache_data(ttl=600) # Cache for 10 minutes
@@ -175,6 +157,12 @@ def get_applied_job_ids(_client, sheet_url):
     try:
         sheet = _client.open_by_url(sheet_url).worksheet("Jobs")
         return set(sheet.col_values(1))
+    except gspread.exceptions.SpreadsheetNotFound:
+        st.error("Google Sheet not found. Please check the URL in your secrets.")
+        return set()
+    except gspread.exceptions.WorksheetNotFound:
+        st.error("Worksheet named 'Jobs' not found in your Google Sheet.")
+        return set()
     except Exception as e:
         st.error(f"Could not read from Google Sheet: {e}")
         return set()
@@ -188,7 +176,6 @@ def log_applied_job(client, sheet_url, job_data):
         sheet = client.open_by_url(sheet_url).worksheet("Jobs")
         header = ["Job ID", "Date Applied", "Company", "Job Title", "Location", "Salary", "Source", "Link"]
         
-        # Check if sheet is empty or header is incorrect
         if not sheet.row_values(1) or sheet.row_values(1) != header:
             sheet.update('A1', [header])
 
@@ -243,7 +230,7 @@ h1, h2, h3 { color: #1f2937; }
     margin-bottom: 10px;
 }
 .job-logo {
-    width: 50px
+    width: 50px;
     height: 50px;
     margin-right: 15px;
     border-radius: 5px;
@@ -283,11 +270,10 @@ def run_main_app():
         JSEARCH_API_KEY = st.secrets["JSEARCH_API_KEY"]
         genai.configure(api_key=GEMINI_API_KEY)
     except KeyError as e:
-        st.error(f"A required key is missing from secrets: {e}. Please contact the administrator.")
+        st.error(f"A required API key is missing from secrets: {e}. Please contact the administrator.")
         st.stop()
 
     G_SHEET_URL = st.secrets.get("g_sheet_url")
-
     model = genai.GenerativeModel('gemini-1.5-pro-latest')
     gs_client = get_gspread_client()
 
@@ -545,13 +531,14 @@ def run_main_app():
                         highlights = job.get('job_highlights')
                         if highlights:
                             st.markdown("---")
-                            for section in highlights:
-                                title = section.get('title', '')
-                                items = section.get('items', [])
-                                if title and items:
-                                    st.markdown(f"<h5>{title}</h5>", unsafe_allow_html=True)
-                                    for item in items:
-                                        st.markdown(f"- {item}")
+                            if highlights.get('Qualifications'):
+                                st.markdown("<h5>Qualifications</h5>", unsafe_allow_html=True)
+                                for q in highlights['Qualifications']:
+                                    st.markdown(f"- {q}")
+                            if highlights.get('Responsibilities'):
+                                st.markdown("<h5>Responsibilities</h5>", unsafe_allow_html=True)
+                                for r in highlights['Responsibilities']:
+                                    st.markdown(f"- {r}")
 
                     col1, col2 = st.columns(2)
                     with col1:
@@ -594,7 +581,7 @@ def check_password():
 
     try:
         correct_password = st.secrets["APP_PASSWORD"]
-    except KeyError:
+    except (FileNotFoundError, KeyError):
         st.error("APP_PASSWORD secret not found. Please contact the administrator.")
         st.stop()
         
