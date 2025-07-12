@@ -515,7 +515,7 @@ def run_main_app():
                                 logo_url = url
                                 break
                     
-                    st.markdown(f"<img src='{logo_url}' class='job-logo' alt='company logo'>", unsafe_allow_html=True)
+                    st.markdown(f'<img src="{logo_url}" class="job-logo" alt="company logo">', unsafe_allow_html=True)
                     st.markdown("<div class='job-title-container'>", unsafe_allow_html=True)
                     st.markdown(f"<div class='job-title'>{job.get('job_title', 'N/A')}</div>", unsafe_allow_html=True)
                     st.markdown(f"<div class='company-name'>{job.get('employer_name', 'N/A')} - {job.get('job_city', 'N/A')}, {job.get('job_country', '')}</div>", unsafe_allow_html=True)
