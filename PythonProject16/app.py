@@ -175,10 +175,14 @@ def log_applied_job(client, sheet_url, job_data):
         return False
     try:
         sheet = client.open_by_url(sheet_url).worksheet("Jobs")
-        header = ["Job ID", "Date Applied", "Company", "Job Title", "Location", "Salary", "Source", "Link", "Job Description"]
+        # Add "Logo" to the header
+        header = ["Job ID", "Date Applied", "Company", "Job Title", "Location", "Salary", "Source", "Link", "Job Description", "Logo"]
         
         if not sheet.row_values(1) or sheet.row_values(1) != header:
             sheet.update('A1', [header])
+
+        logo_url = job_data.get("employer_logo", "")
+        logo_formula = f'=IMAGE("{logo_url}")' if logo_url else ""
 
         row_to_insert = [
             job_data.get("job_id", ""),
@@ -189,14 +193,13 @@ def log_applied_job(client, sheet_url, job_data):
             format_salary(job_data) or "N/A",
             job_data.get("job_publisher", ""),
             job_data.get("job_apply_link", ""),
-            job_data.get("job_description", "") 
+            job_data.get("job_description", ""),
+            logo_formula # Add the logo formula to the row
         ]
         sheet.append_row(row_to_insert)
         
-        # Get the index of the newly added row
         new_row_index = len(sheet.get_all_values())
         
-        # Format the new row to have a height of 120 pixels
         body = {
             "requests": [
                 {
@@ -204,7 +207,7 @@ def log_applied_job(client, sheet_url, job_data):
                         "range": {
                             "sheetId": sheet.id,
                             "dimension": "ROWS",
-                            "startIndex": new_row_index - 1, # API is 0-indexed
+                            "startIndex": new_row_index - 1, 
                             "endIndex": new_row_index
                         },
                         "properties": {
