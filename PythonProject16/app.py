@@ -134,21 +134,23 @@ def format_salary(job):
 def get_gspread_client():
     """Connects to Google Sheets using credentials from Streamlit secrets."""
     try:
-        creds_json = st.secrets["gcp_service_account"]
-        # FIX: The private_key in the JSON from secrets has literal \n characters.
-        # We need to replace them with escaped \\n for the JSON parser.
-        creds_json['private_key'] = creds_json['private_key'].replace('\n', '\\n')
+        # Streamlit automatically parses the TOML secret into a dictionary-like object.
+        # We pass this object directly to the credentials method.
+        creds_dict = st.secrets["gcp_service_account"]
         scopes = ['https://www.googleapis.com/auth/spreadsheets']
-        creds = Credentials.from_service_account_info(creds_json, scopes=scopes)
+        creds = Credentials.from_service_account_info(creds_dict, scopes=scopes)
         client = gspread.authorize(creds)
         return client
     except Exception as e:
         st.error(f"Failed to connect to Google Sheets: {e}")
+        st.info("Please ensure your `gcp_service_account` secret in Streamlit Cloud is a valid JSON object and the service account has been shared with your Google Sheet with 'Editor' permissions.")
         return None
 
 @st.cache_data(ttl=600) # Cache for 10 minutes
 def get_applied_job_ids(_client, sheet_url):
     """Fetches the list of already applied job IDs from the Google Sheet."""
+    if not _client:
+        return set()
     try:
         sheet = _client.open_by_url(sheet_url).worksheet("Jobs")
         return set(sheet.col_values(1))
@@ -158,11 +160,14 @@ def get_applied_job_ids(_client, sheet_url):
 
 def log_applied_job(client, sheet_url, job_data):
     """Appends a new row with the applied job's details to the Google Sheet."""
+    if not client:
+        return False
     try:
         sheet = client.open_by_url(sheet_url).worksheet("Jobs")
         header = ["Job ID", "Date Applied", "Company", "Job Title", "Location", "Salary", "Source", "Link"]
         
-        if not sheet.row_values(1): # Check if sheet is empty
+        # Check if sheet is empty or header is incorrect
+        if not sheet.row_values(1) or sheet.row_values(1) != header:
             sheet.update('A1', [header])
 
         row_to_insert = [
