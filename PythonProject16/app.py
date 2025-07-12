@@ -175,13 +175,11 @@ def log_applied_job(client, sheet_url, job_data):
         return False
     try:
         sheet = client.open_by_url(sheet_url).worksheet("Jobs")
-        header = ["Job ID", "Date Applied", "Company", "Job Title", "Location", "Salary", "Source", "Link", "Job Description", "Logo"]
+        # Removed "Logo" from the header
+        header = ["Job ID", "Date Applied", "Company", "Job Title", "Location", "Salary", "Source", "Link", "Job Description"]
         
         if not sheet.row_values(1) or sheet.row_values(1) != header:
             sheet.update('A1', [header])
-
-        logo_url = job_data.get("employer_logo", "")
-        logo_formula = f'=IMAGE("{logo_url}")' if logo_url else ""
 
         row_to_insert = [
             job_data.get("job_id", ""),
@@ -192,8 +190,7 @@ def log_applied_job(client, sheet_url, job_data):
             format_salary(job_data) or "N/A",
             job_data.get("job_publisher", ""),
             job_data.get("job_apply_link", ""),
-            job_data.get("job_description", ""),
-            logo_formula
+            job_data.get("job_description", "")
         ]
         sheet.append_row(row_to_insert)
         
@@ -280,13 +277,21 @@ def run_main_app():
     model = genai.GenerativeModel('gemini-1.5-pro-latest')
     gs_client = get_gspread_client()
 
+    PLATFORM_LOGOS = {
+        "linkedin": "https://placehold.co/100x100/0A66C2/FFFFFF?text=IN",
+        "indeed": "https://placehold.co/100x100/2164F3/FFFFFF?text=ID",
+        "google": "https://placehold.co/100x100/4285F4/FFFFFF?text=G",
+        "ziprecruiter": "https://placehold.co/100x100/2557A7/FFFFFF?text=ZR",
+        "glassdoor": "https://placehold.co/100x100/0CAA41/FFFFFF?text=GD"
+    }
+    MAPLE_LEAF_LOGO = 'https://placehold.co/100x100/FF0000/FFFFFF?text=🍁'
+
     # Initialize session state variables
     for key in ["messages", "chat_session", "job_title", "job_description", "live_jobs", "current_page", "resume_text", "search_params", "total_jobs", "perform_search"]:
         if key not in st.session_state:
             st.session_state[key] = [] if key in ["messages", "live_jobs"] else 1 if key == "current_page" else {} if key == "search_params" else 0 if key == "total_jobs" else False if key == "perform_search" else ""
 
     with st.sidebar:
-        # App Logo
         st.markdown(
             """
             <div align="center">
@@ -481,8 +486,22 @@ def run_main_app():
             st.subheader(f"Found approximately {st.session_state.total_jobs} jobs. Displaying {len(st.session_state.live_jobs)} results.")
             for i, job in enumerate(st.session_state.live_jobs):
                 with st.container(border=True):
-                    st.markdown(f"**{job.get('job_title', 'N/A')}**")
-                    st.markdown(f"*{job.get('employer_name', 'N/A')} - {job.get('job_city', 'N/A')}, {job.get('job_country', '')}*")
+                    col_logo, col_content = st.columns([1, 11])
+                    
+                    with col_logo:
+                        logo_url = job.get('employer_logo')
+                        if not logo_url:
+                            publisher = job.get('job_publisher', '').lower()
+                            logo_url = MAPLE_LEAF_LOGO # Default to Maple Leaf
+                            for platform, url in PLATFORM_LOGOS.items():
+                                if platform in publisher:
+                                    logo_url = url
+                                    break
+                        st.image(logo_url, width=50)
+
+                    with col_content:
+                        st.markdown(f"**{job.get('job_title', 'N/A')}**")
+                        st.markdown(f"*{job.get('employer_name', 'N/A')} - {job.get('job_city', 'N/A')}, {job.get('job_country', '')}*")
 
                     details = []
                     
