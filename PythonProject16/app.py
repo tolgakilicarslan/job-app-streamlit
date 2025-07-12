@@ -83,7 +83,6 @@ def search_jobs_api(keywords, location, api_key, page=1, required_skills="", rem
         query += f" with skills in {required_skills}"
         
     url = "https://jsearch.p.rapidapi.com/search"
-    # Set num_pages to 5 to fetch up to 100 results (20 per page)
     querystring = {"query": query, "page": str(page), "num_pages": "5", "date_posted": date_posted}
     if remote_only:
         querystring["remote_jobs_only"] = "true"
@@ -169,8 +168,11 @@ def get_applied_job_ids(_client, sheet_url):
 
 def log_applied_job(client, sheet_url, job_data):
     """Appends a new row with the applied job's details to the Google Sheet."""
-    if not client or not sheet_url:
-        st.warning("Google Sheets not configured. Job not logged.")
+    if not client:
+        st.warning("Google Sheets not configured. Job not logged.", icon="⚠️")
+        return False
+    if not sheet_url:
+        st.warning("Google Sheet URL not configured. Job not logged.", icon="⚠️")
         return False
     try:
         sheet = client.open_by_url(sheet_url).worksheet("Jobs")
