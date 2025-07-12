@@ -324,7 +324,7 @@ def run_main_app():
 
     with st.sidebar:
         # App Logo
-        st.image("https://placehold.co/250x80/3B82F6/FFFFFF?text=AI+Job+Helper", use_column_width=True)
+        st.image("https://placehold.co/250x80/3B82F6/FFFFFF?text=AI+Job+Helper", use_container_width=True)
         st.markdown("---")
         
         resume_file = st.file_uploader("Upload Resume (PDF/TXT)", type=["pdf", "txt"])
