@@ -203,7 +203,7 @@ def run_main_app():
         st.error(f"A required API key is missing from secrets: {e}. Please contact the administrator.")
         st.stop()
 
-    model = genai.GenerativeModel('gemini-1.5-flash-latest')
+    model = genai.GenerativeModel('gemini-1.5-pro-latest')
 
     # Initialize session state variables
     for key in ["messages", "chat_session", "job_title", "job_description", "live_jobs", "current_page", "resume_text", "search_params", "total_jobs"]:
