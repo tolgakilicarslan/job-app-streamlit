@@ -140,8 +140,11 @@ def format_salary(job):
 @st.cache_resource
 def get_gspread_client():
     """Connects to Google Sheets using credentials from Streamlit secrets."""
+    creds_info = st.secrets.get("gcp_service_account")
+    if creds_info is None:
+        st.warning("gcp_service_account secret not set. Google Sheets integration disabled.")
+        return None
     try:
-        creds_info = st.secrets["gcp_service_account"]
         if isinstance(creds_info, str):
             try:
                 creds_info = json.loads(creds_info)
@@ -161,7 +164,7 @@ def get_gspread_client():
 @st.cache_data(ttl=600) # Cache for 10 minutes
 def get_applied_job_ids(_client, sheet_url):
     """Fetches the list of already applied job IDs from the Google Sheet."""
-    if not _client:
+    if not _client or not sheet_url:
         return set()
     try:
         sheet = _client.open_by_url(sheet_url).worksheet("Jobs")
@@ -172,7 +175,8 @@ def get_applied_job_ids(_client, sheet_url):
 
 def log_applied_job(client, sheet_url, job_data):
     """Appends a new row with the applied job's details to the Google Sheet."""
-    if not client:
+    if not client or not sheet_url:
+        st.warning("Google Sheets not configured. Job not logged.")
         return False
     try:
         sheet = client.open_by_url(sheet_url).worksheet("Jobs")
@@ -271,11 +275,12 @@ def run_main_app():
     try:
         GEMINI_API_KEY = st.secrets["GEMINI_API_KEY"]
         JSEARCH_API_KEY = st.secrets["JSEARCH_API_KEY"]
-        G_SHEET_URL = st.secrets["g_sheet_url"]
         genai.configure(api_key=GEMINI_API_KEY)
-    except (FileNotFoundError, KeyError) as e:
+    except KeyError as e:
         st.error(f"A required key is missing from secrets: {e}. Please contact the administrator.")
         st.stop()
+
+    G_SHEET_URL = st.secrets.get("g_sheet_url")
 
     model = genai.GenerativeModel('gemini-1.5-pro-latest')
     gs_client = get_gspread_client()
@@ -583,7 +588,7 @@ def check_password():
 
     try:
         correct_password = st.secrets["APP_PASSWORD"]
-    except (FileNotFoundError, KeyError):
+    except KeyError:
         st.error("APP_PASSWORD secret not found. Please contact the administrator.")
         st.stop()
         
