@@ -280,22 +280,23 @@ def run_main_app():
     model = genai.GenerativeModel('gemini-1.5-pro-latest')
     gs_client = get_gspread_client()
 
-    PLATFORM_LOGOS = {
-        "linkedin": "https://placehold.co/100x100/0A66C2/FFFFFF?text=IN",
-        "indeed": "https://placehold.co/100x100/2164F3/FFFFFF?text=ID",
-        "google": "https://placehold.co/100x100/4285F4/FFFFFF?text=G",
-        "ziprecruiter": "https://placehold.co/100x100/2557A7/FFFFFF?text=ZR",
-        "glassdoor": "https://placehold.co/100x100/0CAA41/FFFFFF?text=GD"
-    }
-    MAPLE_LEAF_LOGO = 'https://placehold.co/100x100/FF0000/FFFFFF?text=🍁'
-
     # Initialize session state variables
     for key in ["messages", "chat_session", "job_title", "job_description", "live_jobs", "current_page", "resume_text", "search_params", "total_jobs", "perform_search"]:
         if key not in st.session_state:
             st.session_state[key] = [] if key in ["messages", "live_jobs"] else 1 if key == "current_page" else {} if key == "search_params" else 0 if key == "total_jobs" else False if key == "perform_search" else ""
 
     with st.sidebar:
-        st.image("https://placehold.co/250x80/3B82F6/FFFFFF?text=AI+Job+Helper", use_container_width=True)
+        # App Logo
+        st.markdown(
+            """
+            <div align="center">
+                <font face="Verdana, Geneva, sans-serif" size="5" color="#0066CC">
+                    &#128269; AI Job Helper
+                </font>
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
         st.markdown("---")
         
         resume_file = st.file_uploader("Upload Resume (PDF/TXT)", type=["pdf", "txt"])
@@ -480,86 +481,72 @@ def run_main_app():
             st.subheader(f"Found approximately {st.session_state.total_jobs} jobs. Displaying {len(st.session_state.live_jobs)} results.")
             for i, job in enumerate(st.session_state.live_jobs):
                 with st.container(border=True):
-                    col_logo, col_content = st.columns([1, 9])
+                    st.markdown(f"**{job.get('job_title', 'N/A')}**")
+                    st.markdown(f"*{job.get('employer_name', 'N/A')} - {job.get('job_city', 'N/A')}, {job.get('job_country', '')}*")
+
+                    details = []
                     
-                    with col_logo:
-                        logo_url = job.get('employer_logo')
-                        if not logo_url:
-                            publisher = job.get('job_publisher', '').lower()
-                            logo_url = MAPLE_LEAF_LOGO # Default to Maple Leaf
-                            for platform, url in PLATFORM_LOGOS.items():
-                                if platform in publisher:
-                                    logo_url = url
-                                    break
-                        st.image(logo_url, width=50)
-
-                    with col_content:
-                        st.markdown(f"**{job.get('job_title', 'N/A')}**")
-                        st.markdown(f"*{job.get('employer_name', 'N/A')} - {job.get('job_city', 'N/A')}, {job.get('job_country', '')}*")
-
-                        details = []
-                        
-                        if 'match_rate' in job:
-                            details.append(f"<span class='match-rate'>✔ {job['match_rate']}% Match</span>")
-                        elif st.session_state.resume_text:
-                            if st.button("Calculate Match Rate", key=f"match_{i}"):
-                                with st.spinner("AI is calculating match rate..."):
-                                    match_prompt = f"On a scale of 0 to 100, how well does this resume match the following job description? Provide only the number. Resume: {st.session_state.resume_text}\n\nJob Description: {job.get('job_description', '')}"
-                                    match_response = model.generate_content(match_prompt)
-                                    try:
-                                        rate = int(re.search(r'\d+', match_response.text).group())
-                                        st.session_state.live_jobs[i]['match_rate'] = rate
-                                        st.rerun()
-                                    except (ValueError, AttributeError):
-                                        st.session_state.live_jobs[i]['match_rate'] = "N/A"
-                                        st.rerun()
-
-                        job_link = job.get('job_apply_link', '#')
-                        details.append(f"<strong>Source:</strong> <a href='{job_link}' target='_blank'>{job.get('job_publisher', 'N/A')}</a>")
-                        
-                        if job.get('job_posted_at_datetime_utc'):
-                            post_date = datetime.datetime.fromisoformat(job.get('job_posted_at_datetime_utc').replace('Z', '+00:00'))
-                            details.append(f"<strong>Posted:</strong> {post_date.strftime('%b %d, %Y')}")
-
-                        salary = format_salary(job)
-                        if salary:
-                            details.append(f"<strong>Salary:</strong> {salary}")
-                        
-                        employment_type = job.get('job_employment_type')
-                        if employment_type:
-                            details.append(f"<strong>Type:</strong> {employment_type.title()}")
-                            
-                        st.markdown(f"<div class='job-details'>{' | '.join(details)}</div>", unsafe_allow_html=True)
-                        
-                        with st.expander("View Job Description and Highlights"):
-                            st.markdown(job.get('job_description', 'No description available.'))
-                            
-                            highlights = job.get('job_highlights')
-                            if highlights:
-                                st.markdown("---")
-                                if highlights.get('Qualifications'):
-                                    st.markdown("<h5>Qualifications</h5>", unsafe_allow_html=True)
-                                    for q in highlights['Qualifications']:
-                                        st.markdown(f"- {q}")
-                                if highlights.get('Responsibilities'):
-                                    st.markdown("<h5>Responsibilities</h5>", unsafe_allow_html=True)
-                                    for r in highlights['Responsibilities']:
-                                        st.markdown(f"- {r}")
-
-                        btn_col1, btn_col2 = st.columns(2)
-                        with btn_col1:
-                            if st.button("Prepare for this Job", key=f"prepare_{i}"):
-                                st.session_state.job_title = job.get('job_title', '')
-                                st.session_state.job_description = f"{job.get('employer_name', '')}\n\n{job.get('job_description', '')}"
-                                st.success(f"Job details for '{job.get('job_title')}' loaded into the sidebar!")
-                                st.rerun()
-                        with btn_col2:
-                            if st.button("Log as Applied", key=f"log_{i}"):
-                                if log_applied_job(gs_client, G_SHEET_URL, job):
-                                    st.success(f"Logged '{job.get('job_title')}' as applied!")
-                                    get_applied_job_ids.clear() 
-                                    st.session_state.live_jobs.pop(i)
+                    if 'match_rate' in job:
+                        details.append(f"<span class='match-rate'>✔ {job['match_rate']}% Match</span>")
+                    elif st.session_state.resume_text:
+                        if st.button("Calculate Match Rate", key=f"match_{i}"):
+                            with st.spinner("AI is calculating match rate..."):
+                                match_prompt = f"On a scale of 0 to 100, how well does this resume match the following job description? Provide only the number. Resume: {st.session_state.resume_text}\n\nJob Description: {job.get('job_description', '')}"
+                                match_response = model.generate_content(match_prompt)
+                                try:
+                                    rate = int(re.search(r'\d+', match_response.text).group())
+                                    st.session_state.live_jobs[i]['match_rate'] = rate
                                     st.rerun()
+                                except (ValueError, AttributeError):
+                                    st.session_state.live_jobs[i]['match_rate'] = "N/A"
+                                    st.rerun()
+
+                    job_link = job.get('job_apply_link', '#')
+                    details.append(f"<strong>Source:</strong> <a href='{job_link}' target='_blank'>{job.get('job_publisher', 'N/A')}</a>")
+                    
+                    if job.get('job_posted_at_datetime_utc'):
+                        post_date = datetime.datetime.fromisoformat(job.get('job_posted_at_datetime_utc').replace('Z', '+00:00'))
+                        details.append(f"<strong>Posted:</strong> {post_date.strftime('%b %d, %Y')}")
+
+                    salary = format_salary(job)
+                    if salary:
+                        details.append(f"<strong>Salary:</strong> {salary}")
+                    
+                    employment_type = job.get('job_employment_type')
+                    if employment_type:
+                        details.append(f"<strong>Type:</strong> {employment_type.title()}")
+                        
+                    st.markdown(f"<div class='job-details'>{' | '.join(details)}</div>", unsafe_allow_html=True)
+                    
+                    with st.expander("View Job Description and Highlights"):
+                        st.markdown(job.get('job_description', 'No description available.'))
+                        
+                        highlights = job.get('job_highlights')
+                        if highlights:
+                            st.markdown("---")
+                            if highlights.get('Qualifications'):
+                                st.markdown("<h5>Qualifications</h5>", unsafe_allow_html=True)
+                                for q in highlights['Qualifications']:
+                                    st.markdown(f"- {q}")
+                            if highlights.get('Responsibilities'):
+                                st.markdown("<h5>Responsibilities</h5>", unsafe_allow_html=True)
+                                for r in highlights['Responsibilities']:
+                                    st.markdown(f"- {r}")
+
+                    btn_col1, btn_col2 = st.columns(2)
+                    with btn_col1:
+                        if st.button("Prepare for this Job", key=f"prepare_{i}"):
+                            st.session_state.job_title = job.get('job_title', '')
+                            st.session_state.job_description = f"{job.get('employer_name', '')}\n\n{job.get('job_description', '')}"
+                            st.success(f"Job details for '{job.get('job_title')}' loaded into the sidebar!")
+                            st.rerun()
+                    with btn_col2:
+                        if st.button("Log as Applied", key=f"log_{i}"):
+                            if log_applied_job(gs_client, G_SHEET_URL, job):
+                                st.success(f"Logged '{job.get('job_title')}' as applied!")
+                                get_applied_job_ids.clear() 
+                                st.session_state.live_jobs.pop(i)
+                                st.rerun()
 
             st.markdown("---")
             col1, col2, col3 = st.columns([1, 1, 1])
