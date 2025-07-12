@@ -152,14 +152,15 @@ def get_gspread_client():
                 st.error(f"Invalid JSON format in 'gcp_service_account' secret: {json_err}")
                 st.info("Please ensure your `gcp_service_account` secret in Streamlit Cloud is either a valid TOML section with key-value pairs (e.g., [gcp_service_account]\ntype = \"service_account\"\n...) or a valid JSON string with newlines in 'private_key' escaped as \\n, and that the service account has 'Editor' permissions on your Google Sheet.")
                 return None
-        creds_info = dict(creds_info)
+        # Create a mutable dict from the creds_info
+        creds_dict = {k: v for k, v in creds_info.items()}
         # Clean up private_key to remove extra leading/trailing newlines
-        if 'private_key' in creds_info:
-            creds_info['private_key'] = creds_info['private_key'].strip()
-            if not creds_info['private_key'].startswith('-----BEGIN PRIVATE KEY-----'):
-                creds_info['private_key'] = '-----BEGIN PRIVATE KEY-----\n' + creds_info['private_key'] + '\n-----END PRIVATE KEY-----'
+        if 'private_key' in creds_dict:
+            creds_dict['private_key'] = creds_dict['private_key'].strip()
+            if not creds_dict['private_key'].startswith('-----BEGIN PRIVATE KEY-----'):
+                creds_dict['private_key'] = '-----BEGIN PRIVATE KEY-----\n' + creds_dict['private_key'] + '\n-----END PRIVATE KEY-----'
         scopes = ['https://www.googleapis.com/auth/spreadsheets']
-        creds = Credentials.from_service_account_info(creds_info, scopes=scopes)
+        creds = Credentials.from_service_account_info(creds_dict, scopes=scopes)
         client = gspread.authorize(creds)
         return client
     except Exception as e:
