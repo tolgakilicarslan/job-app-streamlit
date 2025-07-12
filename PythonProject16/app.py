@@ -10,6 +10,9 @@ from fpdf import FPDF
 from PIL import Image
 import random
 import re
+import gspread
+from google.oauth2.service_account import Credentials
+import pandas as pd
 
 # --- Page Configuration ---
 st.set_page_config(layout="wide", page_title="AI Job Application Helper")
@@ -139,14 +142,16 @@ def fetch_job_details_from_url(_model, url):
         st.error(f"Error fetching or parsing URL: {e}")
         return "", ""
 
-def search_jobs_api(keywords, location, api_key, page=1, required_skills="", remote_only=False, date_posted="all"):
+def search_jobs_api(keywords, location, api_key, page=1, required_skills="", remote_only=False, date_posted="all", country=""):
     """Searches for jobs using the JSearch API with pagination and skill filtering."""
-    query = f"{keywords} in {location}"
+    full_location = f"{location}, {country}" if location and country != "Any" else location or country
+    query = f"{keywords} in {full_location}"
     if required_skills:
         query += f" with skills in {required_skills}"
         
     url = "https://jsearch.p.rapidapi.com/search"
-    querystring = {"query": query, "page": str(page), "date_posted": date_posted}
+    # Request 5 pages to get up to 100 results
+    querystring = {"query": query, "page": str(page), "num_pages": "5", "date_posted": date_posted}
     if remote_only:
         querystring["remote_jobs_only"] = "true"
         
@@ -157,7 +162,7 @@ def search_jobs_api(keywords, location, api_key, page=1, required_skills="", rem
     try:
         response = requests.get(url, headers=headers, params=querystring, timeout=20)
         response.raise_for_status()
-        return response.json() # Return the full JSON response
+        return response.json() 
     except requests.exceptions.RequestException as e:
         st.error(f"API request failed: {e}")
         return None
@@ -193,17 +198,71 @@ def format_salary(job):
         return f"From ${min_salary:,.0f}{period}"
     return None
 
+# --- Google Sheets Functions ---
+@st.cache_resource
+def get_gspread_client():
+    """Connects to Google Sheets using credentials from Streamlit secrets."""
+    try:
+        creds_json = st.secrets["gcp_service_account"]
+        scopes = ['https://www.googleapis.com/auth/spreadsheets']
+        creds = Credentials.from_service_account_info(creds_json, scopes=scopes)
+        client = gspread.authorize(creds)
+        return client
+    except Exception as e:
+        st.error(f"Failed to connect to Google Sheets: {e}")
+        return None
+
+@st.cache_data(ttl=600) # Cache for 10 minutes
+def get_applied_job_ids(_client, sheet_url):
+    """Fetches the list of already applied job IDs from the Google Sheet."""
+    try:
+        sheet = _client.open_by_url(sheet_url).worksheet("Jobs")
+        # Assuming 'Job ID' is in the first column
+        return set(sheet.col_values(1))
+    except Exception as e:
+        st.error(f"Could not read from Google Sheet: {e}")
+        return set()
+
+def log_applied_job(client, sheet_url, job_data):
+    """Appends a new row with the applied job's details to the Google Sheet."""
+    try:
+        sheet = client.open_by_url(sheet_url).worksheet("Jobs")
+        # Define the order of columns as in your sheet
+        header = ["Job ID", "Date Applied", "Company", "Job Title", "Location", "Salary", "Source", "Link"]
+        
+        # Ensure the sheet has a header row
+        if sheet.row_values(1) != header:
+            sheet.update('A1', [header])
+
+        row_to_insert = [
+            job_data.get("job_id", ""),
+            datetime.date.today().isoformat(),
+            job_data.get("employer_name", ""),
+            job_data.get("job_title", ""),
+            job_data.get("job_city", ""),
+            format_salary(job_data) or "N/A",
+            job_data.get("job_publisher", ""),
+            job_data.get("job_apply_link", "")
+        ]
+        sheet.append_row(row_to_insert)
+        return True
+    except Exception as e:
+        st.error(f"Failed to log job to Google Sheet: {e}")
+        return False
+
 def run_main_app():
     """The main application logic after successful authentication."""
     try:
         GEMINI_API_KEY = st.secrets["GEMINI_API_KEY"]
         JSEARCH_API_KEY = st.secrets["JSEARCH_API_KEY"]
+        G_SHEET_URL = st.secrets["g_sheet_url"]
         genai.configure(api_key=GEMINI_API_KEY)
     except (FileNotFoundError, KeyError) as e:
-        st.error(f"A required API key is missing from secrets: {e}. Please contact the administrator.")
+        st.error(f"A required key is missing from secrets: {e}. Please contact the administrator.")
         st.stop()
 
     model = genai.GenerativeModel('gemini-1.5-pro-latest')
+    gs_client = get_gspread_client()
 
     PLATFORM_LOGOS = {
         "linkedin": "https://placehold.co/100x100/0A66C2/FFFFFF?text=IN",
@@ -212,7 +271,7 @@ def run_main_app():
         "ziprecruiter": "https://placehold.co/100x100/2557A7/FFFFFF?text=ZR",
         "glassdoor": "https://placehold.co/100x100/0CAA41/FFFFFF?text=GD"
     }
-    DEFAULT_LOGO = 'https://placehold.co/100x100/eee/ccc?text=Logo'
+    MAPLE_LEAF_LOGO = 'https://placehold.co/100x100/FF0000/FFFFFF?text=🍁'
 
     # Initialize session state variables
     for key in ["messages", "chat_session", "job_title", "job_description", "live_jobs", "current_page", "resume_text", "search_params", "total_jobs"]:
@@ -247,7 +306,7 @@ def run_main_app():
                     st.session_state.job_title = title
                     st.session_state.job_description = desc
                     st.success("Job details fetched!")
-                    st.rerun() # Rerun to update the widgets below
+                    st.rerun() 
                 else:
                     st.error("Could not extract details. Please paste them manually.")
 
@@ -345,13 +404,16 @@ def run_main_app():
                 search_location = st.text_input("Location (e.g., Toronto, ON)")
                 exclude_keywords = st.text_input("Exclude Keywords (comma-separated)", help="e.g., manager, lead, principal")
             
-            col3, col4 = st.columns(2)
+            col3, col4, col5 = st.columns(3)
             with col3:
                 remote_only = st.checkbox("Search for remote jobs only")
             with col4:
                 date_posted_options = {"All Time": "all", "Past 24 hours": "today", "Past 3 days": "3days", "Past Week": "week", "Past Month": "month"}
                 date_posted_selection = st.selectbox("Date Posted", options=list(date_posted_options.keys()))
                 date_posted_api_value = date_posted_options[date_posted_selection]
+            with col5:
+                country_options = ["Any", "US", "CA", "GB", "AU", "IN"]
+                country_selection = st.selectbox("Country", options=country_options)
 
             submitted = st.form_submit_button("Search for Jobs")
             if submitted:
@@ -362,7 +424,8 @@ def run_main_app():
                     "skills": required_skills,
                     "exclude": exclude_keywords,
                     "remote": remote_only,
-                    "date_posted": date_posted_api_value
+                    "date_posted": date_posted_api_value,
+                    "country": country_selection
                 }
                 st.session_state.live_jobs = [] 
                 st.session_state.total_jobs = 0
@@ -370,23 +433,27 @@ def run_main_app():
         if st.session_state.search_params.get("keywords"):
             with st.spinner(f"Searching for jobs on page {st.session_state.current_page}..."):
                 params = st.session_state.search_params
-                api_response = search_jobs_api(params["keywords"], params["location"], JSEARCH_API_KEY, st.session_state.current_page, params["skills"], params["remote"], params["date_posted"])
+                api_response = search_jobs_api(params["keywords"], params["location"], JSEARCH_API_KEY, st.session_state.current_page, params["skills"], params["remote"], params["date_posted"], params["country"])
                 
                 if api_response:
                     all_results = api_response.get('data', [])
                     st.session_state.total_jobs = api_response.get('estimated_total_results', 0)
                     
+                    # Filter out applied jobs
+                    applied_ids = get_applied_job_ids(gs_client, G_SHEET_URL)
+                    unapplied_results = [job for job in all_results if job.get('job_id') not in applied_ids]
+
                     if params["exclude"]:
                         excluded = [kw.strip().lower() for kw in params["exclude"].split(',')]
                         filtered_results = []
-                        for job in all_results:
+                        for job in unapplied_results:
                             title = job.get('job_title', '').lower()
                             description = job.get('job_description', '').lower()
                             if not any(kw in title or kw in description for kw in excluded):
                                 filtered_results.append(job)
                         st.session_state.live_jobs = filtered_results
                     else:
-                        st.session_state.live_jobs = all_results
+                        st.session_state.live_jobs = unapplied_results
 
         if st.session_state.live_jobs:
             st.markdown("---")
@@ -397,11 +464,10 @@ def run_main_app():
                     
                     st.markdown("<div class='job-header'>", unsafe_allow_html=True)
                     
-                    # New logo logic
                     logo_url = job.get('employer_logo')
                     if not logo_url:
                         publisher = job.get('job_publisher', '').lower()
-                        logo_url = DEFAULT_LOGO # Default
+                        logo_url = MAPLE_LEAF_LOGO # Default to Maple Leaf
                         for platform, url in PLATFORM_LOGOS.items():
                             if platform in publisher:
                                 logo_url = url
@@ -410,7 +476,7 @@ def run_main_app():
                     st.markdown(f"<img src='{logo_url}' class='job-logo' alt='company logo'>", unsafe_allow_html=True)
                     st.markdown("<div class='job-title-container'>", unsafe_allow_html=True)
                     st.markdown(f"<div class='job-title'>{job.get('job_title', 'N/A')}</div>", unsafe_allow_html=True)
-                    st.markdown(f"<div class='company-name'>{job.get('employer_name', 'N/A')} - {job.get('job_city', 'N/A')}</div>", unsafe_allow_html=True)
+                    st.markdown(f"<div class='company-name'>{job.get('employer_name', 'N/A')} - {job.get('job_city', 'N/A')}, {job.get('job_country', '')}</div>", unsafe_allow_html=True)
                     st.markdown("</div></div>", unsafe_allow_html=True)
 
                     details = []
@@ -462,11 +528,20 @@ def run_main_app():
                                 for r in highlights['Responsibilities']:
                                     st.markdown(f"- {r}")
 
-                    if st.button("Prepare for this Job", key=f"prepare_{i}"):
-                        st.session_state.job_title = job.get('job_title', '')
-                        st.session_state.job_description = f"{job.get('employer_name', '')}\n\n{job.get('job_description', '')}"
-                        st.success(f"Job details for '{job.get('job_title')}' loaded into the sidebar!")
-                        st.rerun()
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        if st.button("Prepare for this Job", key=f"prepare_{i}"):
+                            st.session_state.job_title = job.get('job_title', '')
+                            st.session_state.job_description = f"{job.get('employer_name', '')}\n\n{job.get('job_description', '')}"
+                            st.success(f"Job details for '{job.get('job_title')}' loaded into the sidebar!")
+                            st.rerun()
+                    with col2:
+                        if st.button("Log as Applied", key=f"log_{i}"):
+                            if log_applied_job(gs_client, G_SHEET_URL, job):
+                                st.success(f"Logged '{job.get('job_title')}' as applied!")
+                                # Remove the job from the current view
+                                st.session_state.live_jobs.pop(i)
+                                st.rerun()
                     
                     st.markdown(f"</div>", unsafe_allow_html=True)
 
@@ -513,3 +588,49 @@ def check_password():
 
 if check_password():
     run_main_app()
+```
+
+### Important: How to Set Up Google Sheets Integration
+
+To enable this new feature, you need to authorize the application to access your Google Sheet.
+
+**Step 1: Get Your Google Service Account Credentials**
+
+1.  **Go to the Google Cloud Console:** [console.cloud.google.com](https://console.cloud.google.com).
+2.  **Create a New Project:** If you don't have one, create a new project (e.g., "Streamlit Job App").
+3.  **Enable APIs:** In your project, go to "APIs & Services" > "Library". Search for and enable both the **Google Drive API** and the **Google Sheets API**.
+4.  **Create a Service Account:** Go to "APIs & Services" > "Credentials". Click "Create Credentials" and select "Service account". Give it a name (e.g., "sheets-writer") and click "Create and Continue", then "Done".
+5.  **Generate a JSON Key:** Find your new service account on the Credentials page. Click on it, go to the "Keys" tab, click "Add Key", select "Create new key", choose **JSON**, and click "Create". A JSON file will be downloaded to your computer. **Treat this file like a password.**
+
+**Step 2: Share Your Google Sheet**
+
+1.  Open the JSON file you downloaded. Find the `client_email` address (it will look like `...gserviceaccount.com`).
+2.  Open your Google Sheet. Click the "Share" button in the top right.
+3.  Paste the `client_email` into the sharing dialog and give it **Editor** permissions. Click "Share".
+
+**Step 3: Update Your Streamlit Secrets**
+
+1.  Open the JSON key file in a text editor and copy its entire contents.
+2.  Go to your Streamlit Cloud app dashboard, navigate to "Settings" > "Secrets".
+3.  Add the following new secrets:
+
+```toml
+# Paste the entire contents of your JSON key file here
+gcp_service_account = {
+  "type": "service_account",
+  "project_id": "...",
+  "private_key_id": "...",
+  "private_key": "-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----\n",
+  "client_email": "...@...gserviceaccount.com",
+  "client_id": "...",
+  "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+  "token_uri": "https://oauth2.googleapis.com/token",
+  "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
+  "client_x509_cert_url": "..."
+}
+
+# Add the full URL of your Google Sheet
+g_sheet_url = "https://docs.google.com/spreadsheets/d/1EKblVBaV1MSThiAevEzeEz2mBwR1_12rFgweGEeIRBg/edit?usp=sharing"
+```
+
+After completing these steps and rebooting your app, the Google Sheets integration will be fully function
