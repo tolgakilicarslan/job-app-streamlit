@@ -143,14 +143,18 @@ def get_gspread_client():
     try:
         creds_info = st.secrets["gcp_service_account"]
         if isinstance(creds_info, str):
-            creds_info = json.loads(creds_info)
+            try:
+                creds_info = json.loads(creds_info)
+            except json.JSONDecodeError as json_err:
+                st.error(f"Invalid JSON format in 'gcp_service_account' secret: {json_err}")
+                return None
         scopes = ['https://www.googleapis.com/auth/spreadsheets']
         creds = Credentials.from_service_account_info(creds_info, scopes=scopes)
         client = gspread.authorize(creds)
         return client
     except Exception as e:
         st.error(f"Failed to connect to Google Sheets: {e}")
-        st.info("Please ensure your `gcp_service_account` secret in Streamlit Cloud is either a valid TOML section with key-value pairs or a valid JSON string, and the service account has been shared with your Google Sheet with 'Editor' permissions.")
+        st.info("Please ensure your `gcp_service_account` secret in Streamlit Cloud is either a valid TOML section with key-value pairs (e.g., [gcp_service_account]\ntype = \"service_account\"\n...) or a valid JSON string, and that the service account has 'Editor' permissions on your Google Sheet.")
         return None
 
 @st.cache_data(ttl=600) # Cache for 10 minutes
