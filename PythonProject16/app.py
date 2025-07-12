@@ -1,3 +1,4 @@
+```python
 import streamlit as st
 import google.generativeai as genai
 import PyPDF2
@@ -42,6 +43,7 @@ h1, h2, h3 { color: #1f2937; }
     box-shadow: 0 2px 4px rgba(0,0,0,0.05);
     display: flex;
     flex-direction: column;
+    background-color: #ffffff;
 }
 .job-header {
     display: flex;
@@ -79,6 +81,21 @@ h1, h2, h3 { color: #1f2937; }
     font-weight: bold;
     color: #10B981;
 }
+.stExpander > div > details > summary {
+    background-color: #f0f4f8;
+    border-radius: 8px;
+    padding: 8px;
+}
+.stExpander > div > details[open] > summary {
+    background-color: #e0e7ff;
+}
+.sidebar-section {
+    margin-bottom: 20px;
+    padding: 10px;
+    border-radius: 8px;
+    background-color: #ffffff;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -88,11 +105,11 @@ def read_pdf(file):
     """Reads and extracts text from an uploaded PDF file."""
     try:
         pdf_reader = PyPDF2.PdfReader(file)
-        text = "".join(page.extract_text() for page in pdf_reader.pages)
-        return text
+        text = "".join(page.extract_text() or "" for page in pdf_reader.pages)
+        return text.strip()
     except Exception as e:
         st.error(f"Error reading PDF file: {e}")
-        return None
+        return ""
 
 @st.cache_data
 def fetch_job_details_from_url(_model, url):
@@ -110,6 +127,7 @@ def fetch_job_details_from_url(_model, url):
         Provide the output in this exact format, with no extra text or explanations:
         
         Job Title: [The extracted job title]
+        
         Job Description: [The full, extracted job description]
 
         Webpage Text:
@@ -118,22 +136,15 @@ def fetch_job_details_from_url(_model, url):
         extract_response = _model.generate_content(extract_prompt)
         text = extract_response.text.strip()
         
-        lines = text.split('\n')
         job_title = ""
-        job_description_lines = []
+        job_description = ""
         
-        if lines and lines[0].startswith("Job Title:"):
-            job_title = lines[0].replace("Job Title:", "").strip()
+        if "Job Title:" in text:
+            job_title = text.split("Job Title:")[1].split("Job Description:")[0].strip()
         
-        desc_started = False
-        for line in lines[1:]:
-            if line.startswith("Job Description:"):
-                job_description_lines.append(line.replace("Job Description:", "").strip())
-                desc_started = True
-            elif desc_started:
-                job_description_lines.append(line.strip())
+        if "Job Description:" in text:
+            job_description = text.split("Job Description:")[1].strip()
         
-        job_description = '\n'.join(job_description_lines)
         return job_title, job_description
     except Exception as e:
         st.error(f"Error fetching or parsing URL: {e}")
@@ -157,7 +168,7 @@ def search_jobs_api(keywords, location, api_key, page=1, required_skills="", rem
     try:
         response = requests.get(url, headers=headers, params=querystring, timeout=20)
         response.raise_for_status()
-        return response.json() # Return the full JSON response
+        return response.json()  # Return the full JSON response
     except requests.exceptions.RequestException as e:
         st.error(f"API request failed: {e}")
         return None
@@ -167,7 +178,11 @@ def export_to_pdf(content):
     pdf = FPDF()
     pdf.add_page()
     pdf.set_font("Arial", size=12)
-    content = content.encode('latin-1', 'replace').decode('latin-1')
+    # Use utf-8 handling
+    try:
+        content = content.encode('latin-1', 'replace').decode('latin-1')
+    except UnicodeEncodeError:
+        content = content.encode('utf-8', 'replace').decode('utf-8')
     pdf.multi_cell(0, 10, content)
     return pdf.output(dest="S").encode("latin-1")
 
@@ -211,26 +226,24 @@ def run_main_app():
             st.session_state[key] = [] if key in ["messages", "live_jobs"] else 1 if key == "current_page" else {} if key == "search_params" else 0 if key == "total_jobs" else ""
 
     with st.sidebar:
-        st.header("Your Details & Job Info")
-        st.markdown("---")
-        resume_file = st.file_uploader("1. Upload Resume (PDF/TXT)", type=["pdf", "txt"])
-        resume_image = st.file_uploader("Or Upload Resume Image (PNG/JPG)", type=["png", "jpg", "jpeg"])
+        st.markdown("<div class='sidebar-section'>", unsafe_allow_html=True)
+        st.header("Your Resume")
+        resume_file = st.file_uploader("📄 Upload Resume (PDF/TXT)", type=["pdf", "txt"])
+        resume_image = st.file_uploader("🖼️ Or Upload Resume Image (PNG/JPG)", type=["png", "jpg", "jpeg"])
+        st.markdown("</div>", unsafe_allow_html=True)
 
-        if 'resume_text' not in st.session_state:
-            st.session_state.resume_text = ""
-            
-        if resume_file and not st.session_state.resume_text:
+        if resume_file:
             st.session_state.resume_text = read_pdf(resume_file) if resume_file.name.endswith(".pdf") else resume_file.read().decode("utf-8")
-        elif resume_image and not st.session_state.resume_text:
+        elif resume_image:
             img = Image.open(resume_image)
             with st.spinner("Reading resume image..."):
                 response = model.generate_content(["Extract all text from this resume image.", img])
                 st.session_state.resume_text = response.text
         
+        st.markdown("<div class='sidebar-section'>", unsafe_allow_html=True)
         st.header("Job Details")
-        st.markdown("---")
         
-        job_url = st.text_input("Fetch from Job Posting URL (optional)")
+        job_url = st.text_input("🔗 Fetch from Job Posting URL (optional)")
         if st.button("Fetch from URL") and job_url:
             with st.spinner("Fetching and extracting job details..."):
                 title, desc = fetch_job_details_from_url(model, job_url)
@@ -238,15 +251,16 @@ def run_main_app():
                     st.session_state.job_title = title
                     st.session_state.job_description = desc
                     st.success("Job details fetched!")
-                    st.rerun() # Rerun to update the widgets below
+                    st.rerun()
                 else:
                     st.error("Could not extract details. Please paste them manually.")
 
         st.session_state.job_title = st.text_input("Job Title", value=st.session_state.job_title)
         st.session_state.job_description = st.text_area("Job Description", value=st.session_state.job_description, height=200)
+        st.markdown("</div>", unsafe_allow_html=True)
         
+        st.markdown("<div class='sidebar-section'>", unsafe_allow_html=True)
         st.header("Action")
-        st.markdown("---")
         action = st.selectbox(
             "What do you need help with?",
             ["Generate Cover Letter", "Tailor Resume for Job", "Prepare for Interview", "Skill Gap Analysis"],
@@ -277,6 +291,7 @@ def run_main_app():
                         st.error(f"An error occurred with the Gemini API: {e}")
             else:
                 st.error("Please provide a resume, job title, and description.")
+        st.markdown("</div>", unsafe_allow_html=True)
 
     st.title("AI Job Application Helper")
     
@@ -309,19 +324,19 @@ def run_main_app():
                 st.markdown("---")
                 col1, col2, col3 = st.columns([1, 1, 1])
                 with col1:
-                    if st.button("Clear Chat History"):
+                    if st.button("🗑️ Clear Chat History"):
                         st.session_state.messages = []
                         st.session_state.chat_session = None
                         st.rerun()
                 with col2:
                     last_content = st.session_state.messages[-1]["content"]
                     file_name_md = f"{st.session_state.action_select.lower().replace(' ', '_')}_draft.md"
-                    st.download_button("Download as MD", data=last_content, file_name=file_name_md)
+                    st.download_button("📥 Download as MD", data=last_content, file_name=file_name_md)
                 with col3:
                     last_content = st.session_state.messages[-1]["content"]
                     file_name_pdf = f"{st.session_state.action_select.lower().replace(' ', '_')}_draft.pdf"
                     pdf_data = export_to_pdf(last_content)
-                    st.download_button("Download as PDF", data=pdf_data, file_name=file_name_pdf, mime="application/pdf")
+                    st.download_button("📥 Download as PDF", data=pdf_data, file_name=file_name_pdf, mime="application/pdf")
 
     with tab2:
         st.header("Live Job Search")
@@ -338,7 +353,7 @@ def run_main_app():
             
             remote_only = st.checkbox("Search for remote jobs only")
             
-            submitted = st.form_submit_button("Search for Jobs")
+            submitted = st.form_submit_button("🔍 Search for Jobs")
             if submitted:
                 st.session_state.current_page = 1
                 st.session_state.search_params = {
@@ -362,25 +377,20 @@ def run_main_app():
                     
                     if params["exclude"]:
                         excluded = [kw.strip().lower() for kw in params["exclude"].split(',')]
-                        filtered_results = []
-                        for job in all_results:
-                            title = job.get('job_title', '').lower()
-                            description = job.get('job_description', '').lower()
-                            if not any(kw in title or kw in description for kw in excluded):
-                                filtered_results.append(job)
+                        filtered_results = [job for job in all_results if not any(kw in job.get('job_title', '').lower() or kw in job.get('job_description', '').lower() for kw in excluded)]
                         st.session_state.live_jobs = filtered_results
                     else:
                         st.session_state.live_jobs = all_results
 
-        if st.session_state.live_jobs:
+        if st.session_state.live_jobs > 0 and st.session_state.live_jobs:
             st.markdown("---")
-            st.subheader(f"Found approximately {st.session_state.total_jobs} jobs. Displaying page {st.session_state.current_page}.")
+            st.subheader(f"Found approximately {st.session_state.total_jobs} jobs. Displaying page {len(st.session_state.live_jobs)} results on page {st.session_state.current_page}.")
             for i, job in enumerate(st.session_state.live_jobs):
                 with st.container():
                     st.markdown(f"<div class='job-card'>", unsafe_allow_html=True)
                     
                     st.markdown("<div class='job-header'>", unsafe_allow_html=True)
-                    logo_url = job.get('employer_logo', 'https://placehold.co/100x100/eee/ccc?text=Logo')
+                    logo_url = job.get('employer_logo', 'https://placehold.co/50x50/png?text=Logo')
                     st.markdown(f"<img src='{logo_url}' class='job-logo' alt='company logo'>", unsafe_allow_html=True)
                     st.markdown("<div class='job-title-container'>", unsafe_allow_html=True)
                     st.markdown(f"<div class='job-title'>{job.get('job_title', 'N/A')}</div>", unsafe_allow_html=True)
@@ -392,9 +402,9 @@ def run_main_app():
                     if 'match_rate' in job:
                         details.append(f"<span class='match-rate'>✔ {job['match_rate']}% Match</span>")
                     elif st.session_state.resume_text:
-                        if st.button("Calculate Match Rate", key=f"match_{i}"):
+                        if st.button("📊 Calculate Match Rate", key=f"match_{i}"):
                             with st.spinner("AI is calculating match rate..."):
-                                match_prompt = f"On a scale of 0 to 100, how well does this resume match the following job description? Provide only the number. Resume: {st.session_state.resume_text}\n\nJob Description: {job.get('job_description', '')}"
+                                match_prompt = f"On a scale of 0} to 100, how well does this resume match the following job description? Provide only the number. Resume: {st.session_state.resume_text}\n\nJob Description: {job.get('job_description', '')}"
                                 match_response = model.generate_content(match_prompt)
                                 try:
                                     rate = int(re.search(r'\d+', match_response.text).group())
@@ -417,14 +427,14 @@ def run_main_app():
                     
                     employment_type = job.get('job_employment_type')
                     if employment_type:
-                        details.append(f"<strong>Type:</strong> {employment_type.title()}")
+                        details.append(f"<strong>Type:</strong> {employment_type.capitalize()}")
                         
                     st.markdown(f"<div class='job-details'>{' | '.join(details)}</div>", unsafe_allow_html=True)
                     
                     with st.expander("View Job Description and Highlights"):
                         st.markdown(job.get('job_description', 'No description available.'))
                         
-                        highlights = job.get('job_highlights')
+                        highlights =job.get('job_highlights')
                         if highlights:
                             st.markdown("---")
                             if highlights.get('Qualifications'):
@@ -436,23 +446,23 @@ def run_main_app():
                                 for r in highlights['Responsibilities']:
                                     st.markdown(f"- {r}")
 
-                    if st.button("Prepare for this Job", key=f"prepare_{i}"):
+                    if st.button("📝 Prepare for this Job", key=f"prepare_{i}"):
                         st.session_state.job_title = job.get('job_title', '')
                         st.session_state.job_description = f"{job.get('employer_name', '')}\n\n{job.get('job_description', '')}"
                         st.success(f"Job details for '{job.get('job_title')}' loaded into the sidebar!")
                         st.rerun()
                     
-                    st.markdown(f"</div>", unsafe_allow_html=True)
+                    st.markdown("</div>", unsafe_allow_html=True)
 
             st.markdown("---")
-            col1, col2, col3 = st.columns([1, 1, 1])
+            col1, col_page, col3 = st.columns([1,2,1])
             with col1:
                 if st.session_state.current_page > 1:
                     if st.button("⬅️ Previous Page"):
                         st.session_state.current_page -= 1
                         st.rerun()
-            with col2:
-                st.write(f"Page {st.session_state.current_page}")
+            with col_page:
+                st.markdown(f"<p style='text-align:center'>Page {st.session_state.current_page}</p>", unsafe_allow_html=True)
             with col3:
                 if len(st.session_state.live_jobs) > 0:
                     if st.button("Next Page ➡️"):
@@ -461,29 +471,29 @@ def run_main_app():
 
 def check_password():
     """Returns `True` if the user had the correct password."""
-    if "password_correct" not in st.session_state:
-        st.session_state.password_correct = False
-
-    if st.session_state.password_correct:
-        return True
-
-    try:
-        correct_password = st.secrets["APP_PASSWORD"]
-    except (FileNotFoundError, KeyError):
-        st.error("APP_PASSWORD secret not found. Please contact the administrator.")
-        st.stop()
-        
-    st.title("Password Required")
-    password = st.text_input("Enter password to access the application", type="password")
-
-    if st.button("Login"):
-        if password == correct_password:
-            st.session_state.password_correct = True
-            st.rerun()
+    def password_entered():
+        """Checks whether a password entered by user is correct."""
+        if st.text_input("Enter password to access the application", type="password", key="password") == st.secrets["APP_PASSWORD"] :
+            st.session_state["password_correct"] = True
+            del st.session_state["password"]  # don't store password
         else:
-            st.error("The password you entered is incorrect.")
-    
-    return False
+            st.session_state["password_correct"] = False
+
+    if "password_correct" not in st.session_state:
+        # First run, show input for password.
+        st.title("Password Required")
+        st.text_input("Enter password to access the application", type="password", on_change=password_entered, key="password")
+        return False
+    elif not st.session_state["password_correct"]:
+        # Password not correct, show input + error.
+        st.title("Password Required")
+        st.text_input("Enter password to access the application", type="password", on_change=password_entered, key="password")
+        st.error("😕 Password incorrect")
+        return False
+    else:
+        # Password correct.
+        return True
 
 if check_password():
     run_main_app()
+```
