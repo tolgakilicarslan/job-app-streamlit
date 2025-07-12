@@ -177,7 +177,6 @@ def format_salary(job):
     max_salary = job.get('job_max_salary')
     period_value = job.get('job_salary_period')
     
-    # FIX: Check if period_value is a string before calling .lower()
     period = period_value.lower() if isinstance(period_value, str) else ''
 
     if not min_salary and not max_salary:
@@ -406,20 +405,36 @@ def run_main_app():
                                     st.rerun()
 
                     job_link = job.get('job_apply_link', '#')
-                    details.append(f"**Source:** <a href='{job_link}' target='_blank'>{job.get('job_publisher', 'N/A')}</a>")
+                    details.append(f"<strong>Source:</strong> <a href='{job_link}' target='_blank'>{job.get('job_publisher', 'N/A')}</a>")
                     
                     if job.get('job_posted_at_datetime_utc'):
                         post_date = datetime.datetime.fromisoformat(job.get('job_posted_at_datetime_utc').replace('Z', '+00:00'))
-                        details.append(f"**Posted:** {post_date.strftime('%b %d, %Y')}")
+                        details.append(f"<strong>Posted:</strong> {post_date.strftime('%b %d, %Y')}")
 
                     salary = format_salary(job)
                     if salary:
-                        details.append(f"**Salary:** {salary}")
+                        details.append(f"<strong>Salary:</strong> {salary}")
                     
+                    employment_type = job.get('job_employment_type')
+                    if employment_type:
+                        details.append(f"<strong>Type:</strong> {employment_type.title()}")
+                        
                     st.markdown(f"<div class='job-details'>{' | '.join(details)}</div>", unsafe_allow_html=True)
                     
-                    with st.expander("View Job Description"):
+                    with st.expander("View Job Description and Highlights"):
                         st.markdown(job.get('job_description', 'No description available.'))
+                        
+                        highlights = job.get('job_highlights')
+                        if highlights:
+                            st.markdown("---")
+                            if highlights.get('Qualifications'):
+                                st.markdown("<h5>Qualifications</h5>", unsafe_allow_html=True)
+                                for q in highlights['Qualifications']:
+                                    st.markdown(f"- {q}")
+                            if highlights.get('Responsibilities'):
+                                st.markdown("<h5>Responsibilities</h5>", unsafe_allow_html=True)
+                                for r in highlights['Responsibilities']:
+                                    st.markdown(f"- {r}")
 
                     if st.button("Prepare for this Job", key=f"prepare_{i}"):
                         st.session_state.job_title = job.get('job_title', '')
