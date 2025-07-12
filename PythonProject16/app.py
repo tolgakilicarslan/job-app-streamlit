@@ -157,10 +157,10 @@ def search_jobs_api(keywords, location, api_key, page=1, required_skills="", rem
     try:
         response = requests.get(url, headers=headers, params=querystring, timeout=20)
         response.raise_for_status()
-        return response.json() # Return the full JSON response
+        return response.json().get('data', [])
     except requests.exceptions.RequestException as e:
         st.error(f"API request failed: {e}")
-        return None
+        return []
 
 def export_to_pdf(content):
     """Exports a string to a PDF file."""
@@ -170,25 +170,6 @@ def export_to_pdf(content):
     content = content.encode('latin-1', 'replace').decode('latin-1')
     pdf.multi_cell(0, 10, content)
     return pdf.output(dest="S").encode("latin-1")
-
-def format_salary(job):
-    """Formats the salary range from a job dictionary."""
-    min_salary = job.get('job_min_salary')
-    max_salary = job.get('job_max_salary')
-    period = job.get('job_salary_period', '').lower()
-    if not min_salary and not max_salary:
-        return None
-    
-    if period:
-        period = f" a {period.rstrip('ly')}" if period.endswith('ly') else f" an {period}"
-    
-    if min_salary and max_salary:
-        return f"${min_salary:,.0f} - ${max_salary:,.0f}{period}"
-    elif max_salary:
-        return f"Up to ${max_salary:,.0f}{period}"
-    elif min_salary:
-        return f"From ${min_salary:,.0f}{period}"
-    return None
 
 def run_main_app():
     """The main application logic after successful authentication."""
@@ -203,9 +184,9 @@ def run_main_app():
     model = genai.GenerativeModel('gemini-1.5-flash-latest')
 
     # Initialize session state variables
-    for key in ["messages", "chat_session", "job_title", "job_description", "live_jobs", "current_page", "resume_text", "search_params", "total_jobs"]:
+    for key in ["messages", "chat_session", "job_title", "job_description", "live_jobs", "current_page", "resume_text", "search_params"]:
         if key not in st.session_state:
-            st.session_state[key] = [] if key in ["messages", "live_jobs"] else 1 if key == "current_page" else {} if key == "search_params" else 0 if key == "total_jobs" else ""
+            st.session_state[key] = [] if key in ["messages", "live_jobs"] else 1 if key == "current_page" else {} if key == "search_params" else ""
 
     with st.sidebar:
         st.header("Your Details & Job Info")
@@ -239,6 +220,7 @@ def run_main_app():
                 else:
                     st.error("Could not extract details. Please paste them manually.")
 
+        # FIX: Use value from session_state and update it on change
         st.session_state.job_title = st.text_input("Job Title", value=st.session_state.job_title)
         st.session_state.job_description = st.text_area("Job Description", value=st.session_state.job_description, height=200)
         
@@ -345,33 +327,29 @@ def run_main_app():
                     "exclude": exclude_keywords,
                     "remote": remote_only
                 }
-                st.session_state.live_jobs = [] 
-                st.session_state.total_jobs = 0
+                st.session_state.live_jobs = [] # Clear previous results
 
         if st.session_state.search_params.get("keywords"):
+            # This block runs if a search has been initiated
             with st.spinner(f"Searching for jobs on page {st.session_state.current_page}..."):
                 params = st.session_state.search_params
-                api_response = search_jobs_api(params["keywords"], params["location"], JSEARCH_API_KEY, st.session_state.current_page, params["skills"], params["remote"])
+                all_results = search_jobs_api(params["keywords"], params["location"], JSEARCH_API_KEY, st.session_state.current_page, params["skills"], params["remote"])
                 
-                if api_response:
-                    all_results = api_response.get('data', [])
-                    st.session_state.total_jobs = api_response.get('estimated_total_results', 0)
-                    
-                    if params["exclude"]:
-                        excluded = [kw.strip().lower() for kw in params["exclude"].split(',')]
-                        filtered_results = []
-                        for job in all_results:
-                            title = job.get('job_title', '').lower()
-                            description = job.get('job_description', '').lower()
-                            if not any(kw in title or kw in description for kw in excluded):
-                                filtered_results.append(job)
-                        st.session_state.live_jobs = filtered_results
-                    else:
-                        st.session_state.live_jobs = all_results
+                if params["exclude"]:
+                    excluded = [kw.strip().lower() for kw in params["exclude"].split(',')]
+                    filtered_results = []
+                    for job in all_results:
+                        title = job.get('job_title', '').lower()
+                        description = job.get('job_description', '').lower()
+                        if not any(kw in title or kw in description for kw in excluded):
+                            filtered_results.append(job)
+                    st.session_state.live_jobs = filtered_results
+                else:
+                    st.session_state.live_jobs = all_results
 
         if st.session_state.live_jobs:
             st.markdown("---")
-            st.subheader(f"Found approximately {st.session_state.total_jobs} jobs. Displaying page {st.session_state.current_page}.")
+            st.subheader(f"Displaying Page {st.session_state.current_page}")
             for i, job in enumerate(st.session_state.live_jobs):
                 with st.container():
                     st.markdown(f"<div class='job-card'>", unsafe_allow_html=True)
@@ -407,16 +385,15 @@ def run_main_app():
                     if job.get('job_posted_at_datetime_utc'):
                         post_date = datetime.datetime.fromisoformat(job.get('job_posted_at_datetime_utc').replace('Z', '+00:00'))
                         details.append(f"**Posted:** {post_date.strftime('%b %d, %Y')}")
-
-                    salary = format_salary(job)
-                    if salary:
-                        details.append(f"**Salary:** {salary}")
+                    
+                    details.append(f"**Applicants:** {random.randint(5, 100)} (Simulated)")
                     
                     st.markdown(f"<div class='job-details'>{' | '.join(details)}</div>", unsafe_allow_html=True)
                     
                     with st.expander("View Job Description"):
                         st.markdown(job.get('job_description', 'No description available.'))
 
+                    # FIX: The button now updates session state and reruns the app
                     if st.button("Prepare for this Job", key=f"prepare_{i}"):
                         st.session_state.job_title = job.get('job_title', '')
                         st.session_state.job_description = f"{job.get('employer_name', '')}\n\n{job.get('job_description', '')}"
@@ -431,6 +408,7 @@ def run_main_app():
                 if st.session_state.current_page > 1:
                     if st.button("⬅️ Previous Page"):
                         st.session_state.current_page -= 1
+                        st.session_state.live_jobs = [] # Clear old results before fetching new
                         st.rerun()
             with col2:
                 st.write(f"Page {st.session_state.current_page}")
@@ -438,6 +416,7 @@ def run_main_app():
                 if len(st.session_state.live_jobs) > 0:
                     if st.button("Next Page ➡️"):
                         st.session_state.current_page += 1
+                        st.session_state.live_jobs = [] # Clear old results before fetching new
                         st.rerun()
 
 def check_password():
