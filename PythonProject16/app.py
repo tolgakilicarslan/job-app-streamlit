@@ -83,6 +83,7 @@ def search_jobs_api(keywords, location, api_key, page=1, required_skills="", rem
         query += f" with skills in {required_skills}"
         
     url = "https://jsearch.p.rapidapi.com/search"
+    # Set num_pages to 5 to fetch up to 100 results (20 per page)
     querystring = {"query": query, "page": str(page), "num_pages": "5", "date_posted": date_posted}
     if remote_only:
         querystring["remote_jobs_only"] = "true"
@@ -138,6 +139,7 @@ def get_gspread_client():
         st.warning("Google Sheets integration is disabled. Please set `gcp_service_account` in your secrets.", icon="⚠️")
         return None
     try:
+        # Streamlit automatically parses TOML secrets into a dictionary-like object.
         scopes = ['https://www.googleapis.com/auth/spreadsheets']
         creds = Credentials.from_service_account_info(dict(creds_info), scopes=scopes)
         client = gspread.authorize(creds)
@@ -175,7 +177,6 @@ def log_applied_job(client, sheet_url, job_data):
         return False
     try:
         sheet = client.open_by_url(sheet_url).worksheet("Jobs")
-        # Add "Logo" to the header
         header = ["Job ID", "Date Applied", "Company", "Job Title", "Location", "Salary", "Source", "Link", "Job Description", "Logo"]
         
         if not sheet.row_values(1) or sheet.row_values(1) != header:
@@ -194,7 +195,7 @@ def log_applied_job(client, sheet_url, job_data):
             job_data.get("job_publisher", ""),
             job_data.get("job_apply_link", ""),
             job_data.get("job_description", ""),
-            logo_formula # Add the logo formula to the row
+            logo_formula
         ]
         sheet.append_row(row_to_insert)
         
@@ -322,9 +323,11 @@ def run_main_app():
             st.session_state[key] = [] if key in ["messages", "live_jobs"] else 1 if key == "current_page" else {} if key == "search_params" else 0 if key == "total_jobs" else ""
 
     with st.sidebar:
-        st.header("Your Details & Job Info")
+        # App Logo
+        st.image("https://placehold.co/250x80/3B82F6/FFFFFF?text=AI+Job+Helper", use_column_width=True)
         st.markdown("---")
-        resume_file = st.file_uploader("1. Upload Resume (PDF/TXT)", type=["pdf", "txt"])
+        
+        resume_file = st.file_uploader("Upload Resume (PDF/TXT)", type=["pdf", "txt"])
         resume_image = st.file_uploader("Or Upload Resume Image (PNG/JPG)", type=["png", "jpg", "jpeg"])
 
         if 'resume_text' not in st.session_state:
@@ -474,13 +477,13 @@ def run_main_app():
                 st.session_state.total_jobs = 0
 
         if st.session_state.search_params.get("keywords"):
-            with st.spinner(f"Searching for jobs on page {st.session_state.current_page}..."):
+            with st.spinner(f"Searching for jobs..."):
                 params = st.session_state.search_params
                 api_response = search_jobs_api(params["keywords"], params["location"], JSEARCH_API_KEY, st.session_state.current_page, params["skills"], params["remote"], params["date_posted"], params["country"])
                 
                 if api_response:
                     all_results = api_response.get('data', [])
-                    st.session_state.total_jobs = api_response.get('estimated_total_results', 0)
+                    st.session_state.total_jobs = api_response.get('estimated_total_results', len(all_results))
                     
                     applied_ids = get_applied_job_ids(gs_client, G_SHEET_URL)
                     unapplied_results = [job for job in all_results if job.get('job_id') not in applied_ids]
@@ -499,7 +502,7 @@ def run_main_app():
 
         if st.session_state.live_jobs:
             st.markdown("---")
-            st.subheader(f"Found approximately {st.session_state.total_jobs} jobs. Displaying page {st.session_state.current_page}.")
+            st.subheader(f"Found approximately {st.session_state.total_jobs} jobs. Displaying {len(st.session_state.live_jobs)} results.")
             for i, job in enumerate(st.session_state.live_jobs):
                 with st.container():
                     st.markdown(f"<div class='job-card'>", unsafe_allow_html=True)
