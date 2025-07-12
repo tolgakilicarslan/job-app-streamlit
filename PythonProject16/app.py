@@ -152,6 +152,7 @@ def get_gspread_client():
                 st.error(f"Invalid JSON format in 'gcp_service_account' secret: {json_err}")
                 st.info("Please ensure your `gcp_service_account` secret in Streamlit Cloud is either a valid TOML section with key-value pairs (e.g., [gcp_service_account]\ntype = \"service_account\"\n...) or a valid JSON string with newlines in 'private_key' escaped as \\n, and that the service account has 'Editor' permissions on your Google Sheet.")
                 return None
+        creds_info = dict(creds_info)
         # Clean up private_key to remove extra leading/trailing newlines
         if 'private_key' in creds_info:
             creds_info['private_key'] = creds_info['private_key'].strip()
