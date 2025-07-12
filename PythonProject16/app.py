@@ -13,6 +13,7 @@ import re
 import gspread
 from google.oauth2.service_account import Credentials
 import pandas as pd
+import json
 
 # --- Page Configuration ---
 st.set_page_config(layout="wide", page_title="AI Job Application Helper")
@@ -133,7 +134,9 @@ def format_salary(job):
 def get_gspread_client():
     """Connects to Google Sheets using credentials from Streamlit secrets."""
     try:
-        creds_json = st.secrets["gcp_service_account"]
+        # The secret is read as a string, so we need to parse it into a dictionary
+        creds_str = st.secrets["gcp_service_account"]
+        creds_json = json.loads(creds_str)
         scopes = ['https://www.googleapis.com/auth/spreadsheets']
         creds = Credentials.from_service_account_info(creds_json, scopes=scopes)
         client = gspread.authorize(creds)
@@ -580,4 +583,4 @@ def check_password():
     return False
 
 if check_password():
-    run_main_app()
+    run_main_ap
