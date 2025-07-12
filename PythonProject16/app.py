@@ -583,4 +583,4 @@ def check_password():
     return False
 
 if check_password():
-    run_main_ap
+    run_main_app()
