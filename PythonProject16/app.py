@@ -316,12 +316,11 @@ def run_main_app():
     MAPLE_LEAF_LOGO = 'https://placehold.co/100x100/FF0000/FFFFFF?text=🍁'
 
     # Initialize session state variables
-    for key in ["messages", "chat_session", "job_title", "job_description", "live_jobs", "current_page", "resume_text", "search_params", "total_jobs"]:
+    for key in ["messages", "chat_session", "job_title", "job_description", "live_jobs", "current_page", "resume_text", "search_params", "total_jobs", "perform_search"]:
         if key not in st.session_state:
-            st.session_state[key] = [] if key in ["messages", "live_jobs"] else 1 if key == "current_page" else {} if key == "search_params" else 0 if key == "total_jobs" else ""
+            st.session_state[key] = [] if key in ["messages", "live_jobs"] else 1 if key == "current_page" else {} if key == "search_params" else 0 if key == "total_jobs" else False if key == "perform_search" else ""
 
     with st.sidebar:
-        # App Logo
         st.image("https://placehold.co/250x80/3B82F6/FFFFFF?text=AI+Job+Helper", use_container_width=True)
         st.markdown("---")
         
@@ -471,10 +470,10 @@ def run_main_app():
                     "date_posted": date_posted_api_value,
                     "country": country_selection
                 }
-                st.session_state.live_jobs = [] 
-                st.session_state.total_jobs = 0
+                st.session_state.perform_search = True
 
-        if st.session_state.search_params.get("keywords"):
+        if st.session_state.get("perform_search"):
+            st.session_state.perform_search = False # Reset flag
             with st.spinner(f"Searching for jobs..."):
                 params = st.session_state.search_params
                 api_response = search_jobs_api(params["keywords"], params["location"], JSEARCH_API_KEY, st.session_state.current_page, params["skills"], params["remote"], params["date_posted"], params["country"])
@@ -497,6 +496,10 @@ def run_main_app():
                         st.session_state.live_jobs = filtered_results
                     else:
                         st.session_state.live_jobs = unapplied_results
+                else:
+                    st.session_state.live_jobs = []
+                    st.session_state.total_jobs = 0
+
 
         if st.session_state.live_jobs:
             st.markdown("---")
@@ -594,6 +597,7 @@ def run_main_app():
                 if st.session_state.current_page > 1:
                     if st.button("⬅️ Previous Page"):
                         st.session_state.current_page -= 1
+                        st.session_state.perform_search = True
                         st.rerun()
             with col2:
                 st.write(f"Page {st.session_state.current_page}")
@@ -601,6 +605,7 @@ def run_main_app():
                 if len(st.session_state.live_jobs) > 0:
                     if st.button("Next Page ➡️"):
                         st.session_state.current_page += 1
+                        st.session_state.perform_search = True
                         st.rerun()
 
 def check_password():
