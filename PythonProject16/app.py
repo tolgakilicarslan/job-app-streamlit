@@ -134,9 +134,10 @@ def format_salary(job):
 def get_gspread_client():
     """Connects to Google Sheets using credentials from Streamlit secrets."""
     try:
-        # The secret is read as a string, so we need to parse it into a dictionary
-        creds_str = st.secrets["gcp_service_account"]
-        creds_json = json.loads(creds_str)
+        creds_json = st.secrets["gcp_service_account"]
+        # FIX: The private_key in the JSON from secrets has literal \n characters.
+        # We need to replace them with escaped \\n for the JSON parser.
+        creds_json['private_key'] = creds_json['private_key'].replace('\n', '\\n')
         scopes = ['https://www.googleapis.com/auth/spreadsheets']
         creds = Credentials.from_service_account_info(creds_json, scopes=scopes)
         client = gspread.authorize(creds)
