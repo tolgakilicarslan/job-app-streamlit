@@ -243,7 +243,7 @@ h1, h2, h3 { color: #1f2937; }
     margin-bottom: 10px;
 }
 .job-logo {
-    width: 50px;
+    width: 50px
     height: 50px;
     margin-right: 15px;
     border-radius: 5px;
