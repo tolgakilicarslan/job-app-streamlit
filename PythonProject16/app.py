@@ -8,11 +8,9 @@ import datetime
 from urllib.parse import quote
 from fpdf import FPDF
 from PIL import Image
-import random
 import re
 import gspread
 from google.oauth2.service_account import Credentials
-import pandas as pd
 import json
 
 # --- Page Configuration ---
@@ -143,16 +141,16 @@ def format_salary(job):
 def get_gspread_client():
     """Connects to Google Sheets using credentials from Streamlit secrets."""
     try:
-        # Streamlit automatically parses the TOML secret into a dictionary-like object.
-        # We pass this object directly to the credentials method.
-        creds_dict = st.secrets["gcp_service_account"]
+        creds_info = st.secrets["gcp_service_account"]
+        if isinstance(creds_info, str):
+            creds_info = json.loads(creds_info)
         scopes = ['https://www.googleapis.com/auth/spreadsheets']
-        creds = Credentials.from_service_account_info(creds_dict, scopes=scopes)
+        creds = Credentials.from_service_account_info(creds_info, scopes=scopes)
         client = gspread.authorize(creds)
         return client
     except Exception as e:
         st.error(f"Failed to connect to Google Sheets: {e}")
-        st.info("Please ensure your `gcp_service_account` secret in Streamlit Cloud is a valid JSON object and the service account has been shared with your Google Sheet with 'Editor' permissions.")
+        st.info("Please ensure your `gcp_service_account` secret in Streamlit Cloud is either a valid TOML section with key-value pairs or a valid JSON string, and the service account has been shared with your Google Sheet with 'Editor' permissions.")
         return None
 
 @st.cache_data(ttl=600) # Cache for 10 minutes
