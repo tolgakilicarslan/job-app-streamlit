@@ -17,6 +17,166 @@ import pandas as pd
 # --- Page Configuration ---
 st.set_page_config(layout="wide", page_title="AI Job Application Helper")
 
+# --- Helper Functions ---
+@st.cache_data
+def read_pdf(file):
+    """Reads and extracts text from an uploaded PDF file."""
+    try:
+        pdf_reader = PyPDF2.PdfReader(file)
+        text = "".join(page.extract_text() for page in pdf_reader.pages)
+        return text
+    except Exception as e:
+        st.error(f"Error reading PDF file: {e}")
+        return None
+
+@st.cache_data
+def fetch_job_details_from_url(_model, url):
+    """Fetches and extracts job title and description from a URL using Gemini."""
+    try:
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.36'}
+        response = requests.get(url, headers=headers, timeout=15)
+        response.raise_for_status()
+        
+        soup = BeautifulSoup(response.text, 'html.parser')
+        page_content = soup.get_text(separator=' ', strip=True)[:25000]
+
+        extract_prompt = f"""
+        Analyze the following text from a webpage and extract the job title and the full job description.
+        Provide the output in this exact format, with no extra text or explanations:
+        
+        Job Title: [The extracted job title]
+        Job Description: [The full, extracted job description]
+
+        Webpage Text:
+        {page_content}
+        """
+        extract_response = _model.generate_content(extract_prompt)
+        text = extract_response.text.strip()
+        
+        lines = text.split('\n')
+        job_title = ""
+        job_description_lines = []
+        
+        if lines and lines[0].startswith("Job Title:"):
+            job_title = lines[0].replace("Job Title:", "").strip()
+        
+        desc_started = False
+        for line in lines[1:]:
+            if line.startswith("Job Description:"):
+                job_description_lines.append(line.replace("Job Description:", "").strip())
+                desc_started = True
+            elif desc_started:
+                job_description_lines.append(line.strip())
+        
+        job_description = '\n'.join(job_description_lines)
+        return job_title, job_description
+    except Exception as e:
+        st.error(f"Error fetching or parsing URL: {e}")
+        return "", ""
+
+def search_jobs_api(keywords, location, api_key, page=1, required_skills="", remote_only=False, date_posted="all", country=""):
+    """Searches for jobs using the JSearch API with pagination and skill filtering."""
+    full_location = f"{location}, {country}" if location and country != "Any" else location or country
+    query = f"{keywords} in {full_location}"
+    if required_skills:
+        query += f" with skills in {required_skills}"
+        
+    url = "https://jsearch.p.rapidapi.com/search"
+    querystring = {"query": query, "page": str(page), "num_pages": "5", "date_posted": date_posted}
+    if remote_only:
+        querystring["remote_jobs_only"] = "true"
+        
+    headers = {
+        "X-RapidAPI-Key": api_key,
+        "X-RapidAPI-Host": "jsearch.p.rapidapi.com"
+    }
+    try:
+        response = requests.get(url, headers=headers, params=querystring, timeout=20)
+        response.raise_for_status()
+        return response.json() 
+    except requests.exceptions.RequestException as e:
+        st.error(f"API request failed: {e}")
+        return None
+
+def export_to_pdf(content):
+    """Exports a string to a PDF file."""
+    pdf = FPDF()
+    pdf.add_page()
+    pdf.set_font("Arial", size=12)
+    content = content.encode('latin-1', 'replace').decode('latin-1')
+    pdf.multi_cell(0, 10, content)
+    return pdf.output(dest="S").encode("latin-1")
+
+def format_salary(job):
+    """Formats the salary range from a job dictionary."""
+    min_salary = job.get('job_min_salary')
+    max_salary = job.get('job_max_salary')
+    period_value = job.get('job_salary_period')
+    
+    period = period_value.lower() if isinstance(period_value, str) else ''
+
+    if not min_salary and not max_salary:
+        return None
+    
+    if period:
+        period = f" a {period.rstrip('ly')}" if period.endswith('ly') else f" an {period}"
+    
+    if min_salary and max_salary:
+        return f"${min_salary:,.0f} - ${max_salary:,.0f}{period}"
+    elif max_salary:
+        return f"Up to ${max_salary:,.0f}{period}"
+    elif min_salary:
+        return f"From ${min_salary:,.0f}{period}"
+    return None
+
+@st.cache_resource
+def get_gspread_client():
+    """Connects to Google Sheets using credentials from Streamlit secrets."""
+    try:
+        creds_json = st.secrets["gcp_service_account"]
+        scopes = ['https://www.googleapis.com/auth/spreadsheets']
+        creds = Credentials.from_service_account_info(creds_json, scopes=scopes)
+        client = gspread.authorize(creds)
+        return client
+    except Exception as e:
+        st.error(f"Failed to connect to Google Sheets: {e}")
+        return None
+
+@st.cache_data(ttl=600) # Cache for 10 minutes
+def get_applied_job_ids(_client, sheet_url):
+    """Fetches the list of already applied job IDs from the Google Sheet."""
+    try:
+        sheet = _client.open_by_url(sheet_url).worksheet("Jobs")
+        return set(sheet.col_values(1))
+    except Exception as e:
+        st.error(f"Could not read from Google Sheet: {e}")
+        return set()
+
+def log_applied_job(client, sheet_url, job_data):
+    """Appends a new row with the applied job's details to the Google Sheet."""
+    try:
+        sheet = client.open_by_url(sheet_url).worksheet("Jobs")
+        header = ["Job ID", "Date Applied", "Company", "Job Title", "Location", "Salary", "Source", "Link"]
+        
+        if not sheet.row_values(1): # Check if sheet is empty
+            sheet.update('A1', [header])
+
+        row_to_insert = [
+            job_data.get("job_id", ""),
+            datetime.date.today().isoformat(),
+            job_data.get("employer_name", ""),
+            job_data.get("job_title", ""),
+            job_data.get("job_city", ""),
+            format_salary(job_data) or "N/A",
+            job_data.get("job_publisher", ""),
+            job_data.get("job_apply_link", "")
+        ]
+        sheet.append_row(row_to_insert)
+        return True
+    except Exception as e:
+        st.error(f"Failed to log job to Google Sheet: {e}")
+        return False
+
 # --- Custom CSS for Fonts and Styling ---
 st.markdown("""
 <style>
@@ -84,171 +244,6 @@ h1, h2, h3 { color: #1f2937; }
 }
 </style>
 """, unsafe_allow_html=True)
-
-# --- Helper Functions ---
-@st.cache_data
-def read_pdf(file):
-    """Reads and extracts text from an uploaded PDF file."""
-    try:
-        pdf_reader = PyPDF2.PdfReader(file)
-        text = "".join(page.extract_text() for page in pdf_reader.pages)
-        return text
-    except Exception as e:
-        st.error(f"Error reading PDF file: {e}")
-        return None
-
-@st.cache_data
-def fetch_job_details_from_url(_model, url):
-    """Fetches and extracts job title and description from a URL using Gemini."""
-    try:
-        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.36'}
-        response = requests.get(url, headers=headers, timeout=15)
-        response.raise_for_status()
-        
-        soup = BeautifulSoup(response.text, 'html.parser')
-        page_content = soup.get_text(separator=' ', strip=True)[:25000]
-
-        extract_prompt = f"""
-        Analyze the following text from a webpage and extract the job title and the full job description.
-        Provide the output in this exact format, with no extra text or explanations:
-        
-        Job Title: [The extracted job title]
-        Job Description: [The full, extracted job description]
-
-        Webpage Text:
-        {page_content}
-        """
-        extract_response = _model.generate_content(extract_prompt)
-        text = extract_response.text.strip()
-        
-        lines = text.split('\n')
-        job_title = ""
-        job_description_lines = []
-        
-        if lines and lines[0].startswith("Job Title:"):
-            job_title = lines[0].replace("Job Title:", "").strip()
-        
-        desc_started = False
-        for line in lines[1:]:
-            if line.startswith("Job Description:"):
-                job_description_lines.append(line.replace("Job Description:", "").strip())
-                desc_started = True
-            elif desc_started:
-                job_description_lines.append(line.strip())
-        
-        job_description = '\n'.join(job_description_lines)
-        return job_title, job_description
-    except Exception as e:
-        st.error(f"Error fetching or parsing URL: {e}")
-        return "", ""
-
-def search_jobs_api(keywords, location, api_key, page=1, required_skills="", remote_only=False, date_posted="all", country=""):
-    """Searches for jobs using the JSearch API with pagination and skill filtering."""
-    full_location = f"{location}, {country}" if location and country != "Any" else location or country
-    query = f"{keywords} in {full_location}"
-    if required_skills:
-        query += f" with skills in {required_skills}"
-        
-    url = "https://jsearch.p.rapidapi.com/search"
-    # Request 5 pages to get up to 100 results
-    querystring = {"query": query, "page": str(page), "num_pages": "5", "date_posted": date_posted}
-    if remote_only:
-        querystring["remote_jobs_only"] = "true"
-        
-    headers = {
-        "X-RapidAPI-Key": api_key,
-        "X-RapidAPI-Host": "jsearch.p.rapidapi.com"
-    }
-    try:
-        response = requests.get(url, headers=headers, params=querystring, timeout=20)
-        response.raise_for_status()
-        return response.json() 
-    except requests.exceptions.RequestException as e:
-        st.error(f"API request failed: {e}")
-        return None
-
-def export_to_pdf(content):
-    """Exports a string to a PDF file."""
-    pdf = FPDF()
-    pdf.add_page()
-    pdf.set_font("Arial", size=12)
-    content = content.encode('latin-1', 'replace').decode('latin-1')
-    pdf.multi_cell(0, 10, content)
-    return pdf.output(dest="S").encode("latin-1")
-
-def format_salary(job):
-    """Formats the salary range from a job dictionary."""
-    min_salary = job.get('job_min_salary')
-    max_salary = job.get('job_max_salary')
-    period_value = job.get('job_salary_period')
-    
-    period = period_value.lower() if isinstance(period_value, str) else ''
-
-    if not min_salary and not max_salary:
-        return None
-    
-    if period:
-        period = f" a {period.rstrip('ly')}" if period.endswith('ly') else f" an {period}"
-    
-    if min_salary and max_salary:
-        return f"${min_salary:,.0f} - ${max_salary:,.0f}{period}"
-    elif max_salary:
-        return f"Up to ${max_salary:,.0f}{period}"
-    elif min_salary:
-        return f"From ${min_salary:,.0f}{period}"
-    return None
-
-# --- Google Sheets Functions ---
-@st.cache_resource
-def get_gspread_client():
-    """Connects to Google Sheets using credentials from Streamlit secrets."""
-    try:
-        creds_json = st.secrets["gcp_service_account"]
-        scopes = ['https://www.googleapis.com/auth/spreadsheets']
-        creds = Credentials.from_service_account_info(creds_json, scopes=scopes)
-        client = gspread.authorize(creds)
-        return client
-    except Exception as e:
-        st.error(f"Failed to connect to Google Sheets: {e}")
-        return None
-
-@st.cache_data(ttl=600) # Cache for 10 minutes
-def get_applied_job_ids(_client, sheet_url):
-    """Fetches the list of already applied job IDs from the Google Sheet."""
-    try:
-        sheet = _client.open_by_url(sheet_url).worksheet("Jobs")
-        # Assuming 'Job ID' is in the first column
-        return set(sheet.col_values(1))
-    except Exception as e:
-        st.error(f"Could not read from Google Sheet: {e}")
-        return set()
-
-def log_applied_job(client, sheet_url, job_data):
-    """Appends a new row with the applied job's details to the Google Sheet."""
-    try:
-        sheet = client.open_by_url(sheet_url).worksheet("Jobs")
-        # Define the order of columns as in your sheet
-        header = ["Job ID", "Date Applied", "Company", "Job Title", "Location", "Salary", "Source", "Link"]
-        
-        # Ensure the sheet has a header row
-        if sheet.row_values(1) != header:
-            sheet.update('A1', [header])
-
-        row_to_insert = [
-            job_data.get("job_id", ""),
-            datetime.date.today().isoformat(),
-            job_data.get("employer_name", ""),
-            job_data.get("job_title", ""),
-            job_data.get("job_city", ""),
-            format_salary(job_data) or "N/A",
-            job_data.get("job_publisher", ""),
-            job_data.get("job_apply_link", "")
-        ]
-        sheet.append_row(row_to_insert)
-        return True
-    except Exception as e:
-        st.error(f"Failed to log job to Google Sheet: {e}")
-        return False
 
 def run_main_app():
     """The main application logic after successful authentication."""
@@ -439,7 +434,6 @@ def run_main_app():
                     all_results = api_response.get('data', [])
                     st.session_state.total_jobs = api_response.get('estimated_total_results', 0)
                     
-                    # Filter out applied jobs
                     applied_ids = get_applied_job_ids(gs_client, G_SHEET_URL)
                     unapplied_results = [job for job in all_results if job.get('job_id') not in applied_ids]
 
@@ -539,7 +533,6 @@ def run_main_app():
                         if st.button("Log as Applied", key=f"log_{i}"):
                             if log_applied_job(gs_client, G_SHEET_URL, job):
                                 st.success(f"Logged '{job.get('job_title')}' as applied!")
-                                # Remove the job from the current view
                                 st.session_state.live_jobs.pop(i)
                                 st.rerun()
                     
@@ -588,49 +581,3 @@ def check_password():
 
 if check_password():
     run_main_app()
-```
-
-### Important: How to Set Up Google Sheets Integration
-
-To enable this new feature, you need to authorize the application to access your Google Sheet.
-
-**Step 1: Get Your Google Service Account Credentials**
-
-1.  **Go to the Google Cloud Console:** [console.cloud.google.com](https://console.cloud.google.com).
-2.  **Create a New Project:** If you don't have one, create a new project (e.g., "Streamlit Job App").
-3.  **Enable APIs:** In your project, go to "APIs & Services" > "Library". Search for and enable both the **Google Drive API** and the **Google Sheets API**.
-4.  **Create a Service Account:** Go to "APIs & Services" > "Credentials". Click "Create Credentials" and select "Service account". Give it a name (e.g., "sheets-writer") and click "Create and Continue", then "Done".
-5.  **Generate a JSON Key:** Find your new service account on the Credentials page. Click on it, go to the "Keys" tab, click "Add Key", select "Create new key", choose **JSON**, and click "Create". A JSON file will be downloaded to your computer. **Treat this file like a password.**
-
-**Step 2: Share Your Google Sheet**
-
-1.  Open the JSON file you downloaded. Find the `client_email` address (it will look like `...gserviceaccount.com`).
-2.  Open your Google Sheet. Click the "Share" button in the top right.
-3.  Paste the `client_email` into the sharing dialog and give it **Editor** permissions. Click "Share".
-
-**Step 3: Update Your Streamlit Secrets**
-
-1.  Open the JSON key file in a text editor and copy its entire contents.
-2.  Go to your Streamlit Cloud app dashboard, navigate to "Settings" > "Secrets".
-3.  Add the following new secrets:
-
-```toml
-# Paste the entire contents of your JSON key file here
-gcp_service_account = {
-  "type": "service_account",
-  "project_id": "...",
-  "private_key_id": "...",
-  "private_key": "-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----\n",
-  "client_email": "...@...gserviceaccount.com",
-  "client_id": "...",
-  "auth_uri": "https://accounts.google.com/o/oauth2/auth",
-  "token_uri": "https://oauth2.googleapis.com/token",
-  "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
-  "client_x509_cert_url": "..."
-}
-
-# Add the full URL of your Google Sheet
-g_sheet_url = "https://docs.google.com/spreadsheets/d/1EKblVBaV1MSThiAevEzeEz2mBwR1_12rFgweGEeIRBg/edit?usp=sharing"
-```
-
-After completing these steps and rebooting your app, the Google Sheets integration will be fully function
