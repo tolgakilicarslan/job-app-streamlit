@@ -205,6 +205,15 @@ def run_main_app():
 
     model = genai.GenerativeModel('gemini-1.5-pro-latest')
 
+    PLATFORM_LOGOS = {
+        "linkedin": "https://placehold.co/100x100/0A66C2/FFFFFF?text=IN",
+        "indeed": "https://placehold.co/100x100/2164F3/FFFFFF?text=ID",
+        "google": "https://placehold.co/100x100/4285F4/FFFFFF?text=G",
+        "ziprecruiter": "https://placehold.co/100x100/2557A7/FFFFFF?text=ZR",
+        "glassdoor": "https://placehold.co/100x100/0CAA41/FFFFFF?text=GD"
+    }
+    DEFAULT_LOGO = 'https://placehold.co/100x100/eee/ccc?text=Logo'
+
     # Initialize session state variables
     for key in ["messages", "chat_session", "job_title", "job_description", "live_jobs", "current_page", "resume_text", "search_params", "total_jobs"]:
         if key not in st.session_state:
@@ -387,7 +396,17 @@ def run_main_app():
                     st.markdown(f"<div class='job-card'>", unsafe_allow_html=True)
                     
                     st.markdown("<div class='job-header'>", unsafe_allow_html=True)
-                    logo_url = job.get('employer_logo', 'https://placehold.co/100x100/eee/ccc?text=Logo')
+                    
+                    # New logo logic
+                    logo_url = job.get('employer_logo')
+                    if not logo_url:
+                        publisher = job.get('job_publisher', '').lower()
+                        logo_url = DEFAULT_LOGO # Default
+                        for platform, url in PLATFORM_LOGOS.items():
+                            if platform in publisher:
+                                logo_url = url
+                                break
+                    
                     st.markdown(f"<img src='{logo_url}' class='job-logo' alt='company logo'>", unsafe_allow_html=True)
                     st.markdown("<div class='job-title-container'>", unsafe_allow_html=True)
                     st.markdown(f"<div class='job-title'>{job.get('job_title', 'N/A')}</div>", unsafe_allow_html=True)
