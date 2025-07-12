@@ -138,7 +138,6 @@ def get_gspread_client():
         st.warning("Google Sheets integration is disabled. Please set `gcp_service_account` in your secrets.", icon="⚠️")
         return None
     try:
-        # Streamlit automatically parses TOML secrets into a dictionary-like object.
         scopes = ['https://www.googleapis.com/auth/spreadsheets']
         creds = Credentials.from_service_account_info(dict(creds_info), scopes=scopes)
         client = gspread.authorize(creds)
@@ -176,7 +175,8 @@ def log_applied_job(client, sheet_url, job_data):
         return False
     try:
         sheet = client.open_by_url(sheet_url).worksheet("Jobs")
-        header = ["Job ID", "Date Applied", "Company", "Job Title", "Location", "Salary", "Source", "Link"]
+        # Add "Job Description" to the header
+        header = ["Job ID", "Date Applied", "Company", "Job Title", "Location", "Salary", "Source", "Link", "Job Description"]
         
         if not sheet.row_values(1) or sheet.row_values(1) != header:
             sheet.update('A1', [header])
@@ -189,7 +189,8 @@ def log_applied_job(client, sheet_url, job_data):
             job_data.get("job_city", ""),
             format_salary(job_data) or "N/A",
             job_data.get("job_publisher", ""),
-            job_data.get("job_apply_link", "")
+            job_data.get("job_apply_link", ""),
+            job_data.get("job_description", "") # Add job description to the row
         ]
         sheet.append_row(row_to_insert)
         return True
