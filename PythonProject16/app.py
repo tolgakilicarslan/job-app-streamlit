@@ -409,7 +409,7 @@ def run_main_app():
                     st.download_button("Download as PDF", data=pdf_data, file_name=file_name_pdf, mime="application/pdf")
 
     with tab2:
-        st.header("Live Job Search")
+        st.header("🔍 Live Job Search")
         st.markdown("Find real job postings and instantly prepare application materials.")
         
         with st.form("search_form"):
@@ -479,9 +479,7 @@ def run_main_app():
             st.markdown("---")
             st.subheader(f"Found approximately {st.session_state.total_jobs} jobs. Displaying {len(st.session_state.live_jobs)} results.")
             for i, job in enumerate(st.session_state.live_jobs):
-                with st.container():
-                    st.markdown("<div class='job-card'>", unsafe_allow_html=True)
-                    
+                with st.container(border=True):
                     col_logo, col_content = st.columns([1, 9])
                     
                     with col_logo:
@@ -562,9 +560,6 @@ def run_main_app():
                                     get_applied_job_ids.clear() 
                                     st.session_state.live_jobs.pop(i)
                                     st.rerun()
-                    
-                    st.markdown(f"</div>", unsafe_allow_html=True, help=None)
-
 
             st.markdown("---")
             col1, col2, col3 = st.columns([1, 1, 1])
